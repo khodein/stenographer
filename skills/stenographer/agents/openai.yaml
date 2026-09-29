@@ -1,4 +1,4 @@
 interface:
   display_name: "Task Stenographer"
-  short_description: "Complete transcript for each Git branch"
-  default_prompt: "Use $stenographer to transcribe in real time every user message, visible AI response, action, tool call, result, and change in the current Git branch task."
+  short_description: "Chronological transcript for each Git branch"
+  default_prompt: "Use $stenographer with the user's chosen mode: ask whether to enable it for this task if no choice exists, then record meaningful events only when enabled, without process noise or duplicates."
