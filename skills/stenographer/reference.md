@@ -21,7 +21,7 @@ Don't auto-tag or guess supersede links for older records. A record with no expl
 Example of a new decision fully replacing an older one:
 
 ```bash
-python3 ~/.codex/skills/stenographer/scripts/stenographer.py append \
+python3 ~/.local/share/skills/stenographer/scripts/stenographer.py append \
   --type decision --title "Example: revised retry policy" \
   --body-file /path/to/decision.md --supersedes E042 \
   --context-section requirement --evidence-status confirmed
@@ -43,7 +43,7 @@ The body should contain the decision itself and the basis for confirming it (e.g
 Record a user message (verbatim text in `--body`):
 
 ```bash
-python3 ~/.codex/skills/stenographer/scripts/stenographer.py append \
+python3 ~/.local/share/skills/stenographer/scripts/stenographer.py append \
   --type user-request \
   --actor user \
   --title "Request: retry policy for failed payments" \
@@ -53,7 +53,7 @@ python3 ~/.codex/skills/stenographer/scripts/stenographer.py append \
 Add a code-change event (body — a short description plus a unified diff with line numbers — written to a file with your editing tool, e.g. a scratch file, and passed via `--body-file`; a diff may contain backticks or `$`, so don't use inline `--body` for it):
 
 ```bash
-python3 ~/.codex/skills/stenographer/scripts/stenographer.py append \
+python3 ~/.local/share/skills/stenographer/scripts/stenographer.py append \
   --type code-change \
   --actor "Example Agent" \
   --title "Fixed retry backoff calculation" \
@@ -78,7 +78,7 @@ Fixed exponential backoff to cap at the configured maximum delay.
 For a command or a check:
 
 ```bash
-python3 ~/.codex/skills/stenographer/scripts/stenographer.py append \
+python3 ~/.local/share/skills/stenographer/scripts/stenographer.py append \
   --type verification \
   --actor "Example Agent" \
   --title "Ran the payments test suite" \

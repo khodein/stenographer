@@ -9,10 +9,10 @@ description: "Maintains a complete real-time transcript for work on the current 
 
 Maintain a chronological transcript of significant events for work on the current Git branch. Completeness means capturing requirements, decisions, changes, and evidence of results — not copying the raw tool-call stream. The transcript is a real-time event log, not an end-of-task summary.
 
-Use `~/.codex/skills/stenographer/scripts/stenographer.py`. Run it **from the working repository**, not from the skill directory: the script resolves the branch via `git rev-parse`/`git branch` relative to the current directory, so running it elsewhere produces the wrong Git context. Always use the full invocation:
+Use `~/.local/share/skills/stenographer/scripts/stenographer.py`. Run it **from the working repository**, not from the skill directory: the script resolves the branch via `git rev-parse`/`git branch` relative to the current directory, so running it elsewhere produces the wrong Git context. Always use the full invocation:
 
 ```bash
-python3 ~/.codex/skills/stenographer/scripts/stenographer.py <command>
+python3 ~/.local/share/skills/stenographer/scripts/stenographer.py <command>
 ```
 
 Do not rely on a shell alias: individual tool calls may run in isolated or non-interactive shells that don't read your shell profile.
@@ -25,7 +25,7 @@ Store transcripts outside the repository:
 
 Keep the branch name in the file name; replace `/` with `__` so a branch never creates a nested directory. Override the storage root with the `STENOGRAPHER_ROOT` environment variable only when actually needed.
 
-Details of `--supersedes`/ID semantics for existing records, the exact `--symbol` naming rules and diff format for `code-change`, and fully worked `append` examples live in `~/.codex/skills/stenographer/reference.md` next to this file. Read it when the matching situation comes up (superseding an older decision, the first `code-change`, unclear example syntax) — not necessarily at the start of every task.
+Details of `--supersedes`/ID semantics for existing records, the exact `--symbol` naming rules and diff format for `code-change`, and fully worked `append` examples live in `~/.local/share/skills/stenographer/reference.md` next to this file. Read it when the matching situation comes up (superseding an older decision, the first `code-change`, unclear example syntax) — not necessarily at the start of every task.
 
 ## Choosing whether to record
 
@@ -45,11 +45,11 @@ Do this after the mode is chosen, before further research, planning, code change
 1. Read this file completely.
 2. Determine the current branch and whether a transcript file exists at the path above, without printing the whole file. Run stenographer commands from the working repository.
 3. If a transcript exists:
-   a. run `python3 ~/.codex/skills/stenographer/scripts/stenographer.py context` and read the output as your primary context;
+   a. run `python3 ~/.local/share/skills/stenographer/scripts/stenographer.py context` and read the output as your primary context;
    b. use the IDs from the context to read the underlying source events via `show --event E001`; for a plan with deltas, read the base plan and every delta that applies to it. The context output is a trimmed excerpt, not a substitute for the full text of requirements;
    c. for older records with no supersede links, don't assume the decision still holds automatically: cross-check the user's latest input and the current code, reading `show --type user-request,user-addition,user-decision,decision,plan` or the whole transcript if needed;
-   d. run `python3 ~/.codex/skills/stenographer/scripts/stenographer.py resume` to set the status back to "in progress".
-4. If no transcript exists, run `python3 ~/.codex/skills/stenographer/scripts/stenographer.py init --task "<short task title>"`.
+   d. run `python3 ~/.local/share/skills/stenographer/scripts/stenographer.py resume` to set the status back to "in progress".
+4. If no transcript exists, run `python3 ~/.local/share/skills/stenographer/scripts/stenographer.py init --task "<short task title>"`.
 5. Record the current user message as a `user-request` event for a new transcript, or `user-addition` with `--actor user` when continuing an existing one.
 6. Only then move on to the rest of the work.
 
@@ -161,27 +161,27 @@ Use one of:
 Extract context and open a specific event (only while enabled):
 
 ```bash
-python3 ~/.codex/skills/stenographer/scripts/stenographer.py context
-python3 ~/.codex/skills/stenographer/scripts/stenographer.py show --event E042
+python3 ~/.local/share/skills/stenographer/scripts/stenographer.py context
+python3 ~/.local/share/skills/stenographer/scripts/stenographer.py show --event E042
 ```
 
 Show the current branch transcript, in full or filtered by type:
 
 ```bash
-python3 ~/.codex/skills/stenographer/scripts/stenographer.py show
-python3 ~/.codex/skills/stenographer/scripts/stenographer.py show --type decision,blocker,plan
+python3 ~/.local/share/skills/stenographer/scripts/stenographer.py show
+python3 ~/.local/share/skills/stenographer/scripts/stenographer.py show --type decision,blocker,plan
 ```
 
 Create a transcript:
 
 ```bash
-python3 ~/.codex/skills/stenographer/scripts/stenographer.py init --task "Short task description"
+python3 ~/.local/share/skills/stenographer/scripts/stenographer.py init --task "Short task description"
 ```
 
 Add an event (minimal template; `--type` is one of the list above):
 
 ```bash
-python3 ~/.codex/skills/stenographer/scripts/stenographer.py append \
+python3 ~/.local/share/skills/stenographer/scripts/stenographer.py append \
   --type <type> --actor <user|system|model name> --title "<short title>" \
   --body "<verbatim text>"
 ```
@@ -191,25 +191,25 @@ Use `--body-file <path>` instead of `--body` for text with backticks/`$`/Markdow
 Regenerate the current branch's digest (`<branch>.digest.md`): status, task, per-type counts, decisions with no explicit supersede, blockers, affected files/symbols, and plans with their deltas:
 
 ```bash
-python3 ~/.codex/skills/stenographer/scripts/stenographer.py digest
+python3 ~/.local/share/skills/stenographer/scripts/stenographer.py digest
 ```
 
 Regenerate the repository's branch index (`INDEX.md` in the repository's transcript directory) — a branch/status/date/task table across every stored transcript:
 
 ```bash
-python3 ~/.codex/skills/stenographer/scripts/stenographer.py index
+python3 ~/.local/share/skills/stenographer/scripts/stenographer.py index
 ```
 
 Resume work on an existing transcript after reading it fully:
 
 ```bash
-python3 ~/.codex/skills/stenographer/scripts/stenographer.py resume
+python3 ~/.local/share/skills/stenographer/scripts/stenographer.py resume
 ```
 
 Mark a branch as finished (default status `done`):
 
 ```bash
-python3 ~/.codex/skills/stenographer/scripts/stenographer.py finish --status "done"
+python3 ~/.local/share/skills/stenographer/scripts/stenographer.py finish --status "done"
 ```
 
 ## Completing a response
@@ -221,4 +221,4 @@ Before the final response, while the stenographer is enabled:
 3. Record the substantive final response verbatim as an `agent-response` event; skip a pure acknowledgement with no new information. Don't create an additional summary.
 4. Don't treat the transcript as a substitute for the response to the user: the final response must stand on its own.
 5. Run `digest` so the next pass at this task (in this session or another) starts from an up-to-date digest instead of a stale one.
-6. When work on the branch is done (merged/closed), run `python3 ~/.codex/skills/stenographer/scripts/stenographer.py finish` to move the status from "in progress" to "done", then `digest` so the digest reflects the final status.
+6. When work on the branch is done (merged/closed), run `python3 ~/.local/share/skills/stenographer/scripts/stenographer.py finish` to move the status from "in progress" to "done", then `digest` so the digest reflects the final status.
