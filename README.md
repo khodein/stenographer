@@ -1,6 +1,6 @@
 # Stenographer
 
-`stenographer` is a skill for AI coding agents (Claude Code, Codex, and any other agent that can read a Markdown skill file) that maintains a chronological task transcript for each Git branch. It records verbatim user messages, visible AI responses, actions, tool calls, results, decisions, code changes, and verification events while excluding secrets and hidden model reasoning. The agent asks whether to enable it for each new task and only records while you've said yes.
+`stenographer` is a skill for AI coding agents (Claude Code, Codex, and any other agent that can read a Markdown skill file) that maintains a chronological task transcript for each Git branch. It records verbatim user messages, visible AI responses, actions, tool calls, results, decisions, code changes, and verification events while excluding secrets and hidden model reasoning. It is off by default and records only while you've explicitly enabled it for the task.
 
 ## Why use it?
 
@@ -58,7 +58,7 @@ Restart your agent, or start a new task, after installation. If you only use one
 
 ## Usage
 
-Invoke the skill explicitly with `$stenographer` (Codex) or by name (Claude Code), or add a project instruction requiring it before work in Git repositories. By default the agent asks once per task whether to enable it and only records after you agree. Run every command below from the Git repository whose branch should be transcribed.
+Invoke the skill explicitly with `$stenographer` (Codex) or by name (Claude Code), or add a project instruction requiring it before work in Git repositories. It is off by default: the agent never asks in advance and records only after you enable it for the task. Run every command below from the Git repository whose branch should be transcribed.
 
 ```bash
 python3 ~/.local/share/skills/stenographer/scripts/stenographer.py show

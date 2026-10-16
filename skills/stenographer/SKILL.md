@@ -1,6 +1,6 @@
 ---
 name: stenographer
-description: "Maintains a complete real-time transcript for work on the current Git branch, recording verbatim user messages and visible AI responses, decisions, changes, checks, and external operations, without process noise or duplicates. Ask whether to enable it for a new task before research, planning, or changes; if the user declines, do not run it."
+description: "Maintains a complete real-time transcript for work on the current Git branch, recording verbatim user messages and visible AI responses, decisions, changes, checks, and external operations, without process noise or duplicates. Off by default: run only on the user's explicit request, and don't ask about it in advance."
 ---
 
 # Task Stenographer
@@ -29,11 +29,10 @@ Details of `--supersedes`/ID semantics for existing records, the exact `--symbol
 
 ## Choosing whether to record
 
-Before starting a new task in a Git repository, ask: "Use the stenographer for this task?" and wait for an answer before research, planning, changes, or running any stenographer command. No answer is not a choice.
+The stenographer is off by default. Don't ask about it before a task and don't run any stenographer command until the user explicitly enables it (by invoking the skill, "keep a transcript", etc.). No instruction means off.
 
-- If the user has already explicitly enabled or disabled the stenographer, don't ask again. A direct request to keep a transcript also counts as consent; discussing or editing this skill by itself does not.
-- The choice holds for the whole current task: follow-ups, new stages, resuming after a pause, or restoring context don't require asking again. Carry the chosen mode through task handoffs instead of writing a separate file for a decline. Ask again for a genuinely new, independent task, unless the user set the mode for the whole session or some other explicit scope.
-- If declined, don't read or modify the transcript, and don't run `show`, `context`, `init`, `resume`, `append`, `digest`, `index`, or `finish`. Do the rest of the task normally. A direct request to work with an old transcript authorizes only that specific work, not recording the current task.
+- The choice holds for the whole current task: follow-ups, new stages, resuming after a pause, or restoring context don't require enabling again. Carry the mode through task handoffs. For a genuinely new, independent task the mode is off again, unless the user set the mode for the whole session or some other explicit scope.
+- While off, don't read or modify the transcript, and don't run `show`, `context`, `init`, `resume`, `append`, `digest`, `index`, or `finish`. A direct request to work with an old transcript authorizes only that specific work, not recording the current task.
 - If the user changes their choice mid-task, apply it immediately. After disabling, don't run even the closing commands. After enabling, start recording from that point — don't reconstruct missed events from memory; note the user's request and mark where recording begins.
 
 The rest of this skill applies only while the stenographer is enabled. An existing transcript or an "in progress" status do not substitute for the user's choice.
@@ -89,7 +88,7 @@ Use `tool-call`/`tool-result` when the operation itself matters for reconstructi
 - Bootstrap actions: reading the transcript, rules, conventions, or skill files; calls to the stenographer itself, `digest`, `index`, and their technical confirmations. If a rule changed a decision, capture that inside the substantive event instead.
 - Routine code reading, search commands, and match lists with no new finding; a repeated `status` or `diff` when nothing changed.
 - Announcements ("starting", "reading", "checking", "using the skill"), stage transitions, and repeated acknowledgements of the user's own edits. A new constraint or decision inside a comment is still recorded verbatim with that comment.
-- Polling with no new result, session/cell/chunk IDs, tool-call duration, token counts, JSON envelopes, and other transport metadata. Record meaningful performance measurements.
+- Polling with no new result, session/cell/chunk IDs, tool-call duration, JSON envelopes, and other transport metadata. Record meaningful performance measurements. Record turn tokens only in `agent-response` via `--with-usage` (see "Completing a response"); never type the numbers by hand.
 - Full successful logs, an entire file just read, repeated listings, and technical `Done`/`Success` messages — a verifiable result is enough instead.
 - Separate entries for every todo item or step-status change. Record plan content changes under the next section instead.
 - Empty events and placeholder titles. Prepare the body first, then run `append`. If a call fails, fix the cause and retry — don't create an empty event instead.
@@ -218,7 +217,7 @@ Before the final response, while the stenographer is enabled:
 
 1. Make sure every significant event from this turn is recorded per the selection rules, with no empty or duplicate entries.
 2. If a final plan was produced, make sure its full content was published in the transcript as a separate `plan` event.
-3. Record the substantive final response verbatim as an `agent-response` event; skip a pure acknowledgement with no new information. Don't create an additional summary.
+3. Record the substantive final response verbatim as an `agent-response` event; skip a pure acknowledgement with no new information. Don't create an additional summary. Add the `--with-usage` flag: the script appends the sum of AI response tokens for the turn (input, cache read/write, output) from the Claude Code session transcript. Use it only for `agent-response` and `agent-comment`; if the transcript isn't found, record the event without the flag.
 4. Don't treat the transcript as a substitute for the response to the user: the final response must stand on its own.
 5. Run `digest` so the next pass at this task (in this session or another) starts from an up-to-date digest instead of a stale one.
 6. When work on the branch is done (merged/closed), run `python3 ~/.local/share/skills/stenographer/scripts/stenographer.py finish` to move the status from "in progress" to "done", then `digest` so the digest reflects the final status.

@@ -1,4 +1,4 @@
 interface:
   display_name: "Task Stenographer"
   short_description: "Chronological transcript for each Git branch"
-  default_prompt: "Use $stenographer with the user's chosen mode: ask whether to enable it for this task if no choice exists, then record meaningful events only when enabled, without process noise or duplicates."
+  default_prompt: "Use $stenographer only when the user explicitly enables it (off by default, never ask in advance): record meaningful events, without process noise or duplicates."

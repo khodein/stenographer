@@ -2,6 +2,7 @@
 
 import argparse
 import fcntl
+import json
 import os
 import re
 import subprocess
@@ -534,6 +535,42 @@ def command_init(task: str) -> int:
     return 0
 
 
+def last_turn_usage() -> Optional[str]:
+    """Sums the tokens of AI responses after the last user message from the Claude Code session transcript."""
+    project_dir = Path.home() / ".claude" / "projects" / re.sub(r"[^A-Za-z0-9]", "-", os.getcwd())
+    sessions = sorted(project_dir.glob("*.jsonl"), key=lambda item: item.stat().st_mtime, reverse=True)
+    if not sessions:
+        return None
+    usage_by_message: dict = {}
+    for line in sessions[0].read_text(encoding="utf-8").splitlines():
+        try:
+            record = json.loads(line)
+        except ValueError:
+            continue
+        if record.get("isSidechain"):
+            continue
+        message = record.get("message") or {}
+        if record.get("type") == "user" and not record.get("isMeta"):
+            content = message.get("content")
+            if isinstance(content, str) or any(
+                isinstance(block, dict) and block.get("type") == "text" for block in content or []
+            ):
+                usage_by_message = {}
+        elif record.get("type") == "assistant" and message.get("usage"):
+            usage_by_message[message.get("id") or record.get("uuid")] = message["usage"]
+    if not usage_by_message:
+        return None
+    totals = {"input_tokens": 0, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "output_tokens": 0}
+    for usage in usage_by_message.values():
+        for key in totals:
+            totals[key] += usage.get(key) or 0
+    return (
+        f"Turn tokens (from the session transcript, {len(usage_by_message)} API calls): "
+        f"input {totals['input_tokens']}, cache read {totals['cache_read_input_tokens']}, "
+        f"cache write {totals['cache_creation_input_tokens']}, output {totals['output_tokens']}"
+    )
+
+
 def command_append(args: argparse.Namespace) -> int:
     path, _, _, _ = transcript_path()
     if args.body_file:
@@ -545,6 +582,11 @@ def command_append(args: argparse.Namespace) -> int:
         if not body_file.exists():
             raise RuntimeError(f"--body-file path not found: {body_file}")
         args.body = body_file.read_text(encoding="utf-8").rstrip("\n")
+    if args.with_usage:
+        usage_line = last_turn_usage()
+        if usage_line is None:
+            raise RuntimeError("Claude Code session transcript with token usage not found")
+        args.body = f"{args.body or ''}\n\n{usage_line}".strip()
     values = [
         args.title,
         args.body or "",
@@ -665,6 +707,11 @@ def parser() -> argparse.ArgumentParser:
             "escaping issues (backticks, $, quotes) in long or Markdown text: "
             "write the text to a file with your editing tool and pass its path here"
         ),
+    )
+    append.add_argument(
+        "--with-usage",
+        action="store_true",
+        help="Append the sum of AI response tokens for the current turn to the body (from the Claude Code session transcript)",
     )
     append.add_argument("--file", action="append")
     append.add_argument("--symbol", action="append")
