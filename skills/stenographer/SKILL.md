@@ -17,7 +17,7 @@ python3 ~/.local/share/skills/stenographer/scripts/stenographer.py <command>
 
 Do not rely on a shell alias: individual tool calls may run in isolated or non-interactive shells that don't read your shell profile.
 
-Store transcripts outside the repository:
+Store transcripts outside the working repository, in the stenographer repository the skill is installed from:
 
 ```text
 <skill repository>/transcripts/<repository>/<key>.md
