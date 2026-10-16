@@ -130,7 +130,8 @@ class StenographerTest(BaseCase):
         self.run_cli('append', '--type', 'research', '--title', 'Format example', '--body', body)
         self.append('Real decision')
         self.assertEqual(len(m.parse_events(self.log.read_text())), 2)
-        self.assertIn(body, self.run_cli('show', '--event', 'E001'))
+        # The header-like line inside the fence is stored escaped, everything else verbatim.
+        self.assertIn(body.replace('### 2026', '\\### 2026'), self.run_cli('show', '--event', 'E001'))
 
     def test_unbalanced_fence_in_body_does_not_hide_later_events(self):
         # A diff hunk can show an opening fence without its closing line.
@@ -149,6 +150,38 @@ class StenographerTest(BaseCase):
         self.run_cli('append', '--type', 'research', '--title', 'Pasted event', '--body', copy)
         self.append('Next decision')
         self.assertEqual([e['id'] for e in m.parse_events(self.log.read_text())], ['E001', 'E002', 'E003'])
+
+    def test_pasted_event_block_does_not_break_the_transcript(self):
+        self.append('First decision')
+        pasted = ('Pasted from another transcript:\n\n### 2026-01-01T00:00:00+04:00 — Pasted\n'
+                  '- Type: `decision`\n- Author: `x`\n- ID: `E001`\n\nbody')
+        self.run_cli('append', '--type', 'user-addition', '--actor', 'user', '--title', 'Pasted event', '--body', pasted)
+        self.append('After the paste')
+        events = m.parse_events(self.log.read_text())
+        self.assertEqual([e['id'] for e in events], ['E001', 'E002', 'E003'])
+        self.assertEqual([e['title'] for e in events], ['First decision', 'Pasted event', 'After the paste'])
+        shown = self.run_cli('show', '--event', 'E002')
+        self.assertIn('\\### 2026-01-01T00:00:00+04:00 — Pasted', shown)
+        self.assertIn('- Type: `decision`', shown)
+        digest = self.log.with_name('test.digest.md').read_text()
+        self.assertEqual(digest.count('· Pasted'), 1)
+        self.assertNotIn('2026-01-01', digest)
+
+    def test_header_like_lines_are_escaped_in_every_text_field(self):
+        header = '### 2026-01-01T00:00:00+04:00 — Fake\n- Type: `decision`\n- Author: `x`'
+        self.run_cli('append', '--type', 'code-change', '--title', 'Fields', '--body', header,
+                     '--file', 'a.kt\n' + header, '--symbol', 'a.A\n' + header,
+                     '--command', 'echo\n' + header, '--result', 'ok\n' + header)
+        self.append('Next')
+        events = m.parse_events(self.log.read_text())
+        self.assertEqual([e['id'] for e in events], ['E001', 'E002'])
+        self.assertEqual(self.log.read_text().count('\\### 2026-01-01'), 5)
+
+    def test_escaping_leaves_normal_text_and_the_real_header_alone(self):
+        text = 'Heading:\n### Not an event\n#### 2026-01-01T00:00:00 — Deeper\n\\### 2026-01-01T00:00:00+04:00 — Already escaped'
+        self.run_cli('append', '--type', 'research', '--title', 'Plain', '--body', text)
+        self.assertIn(text, self.run_cli('show', '--event', 'E001'))
+        self.assertEqual(len(m.parse_events(self.log.read_text())), 1)
 
     def test_context_sections_and_multiple_replacements(self):
         self.append('Old question', '--context-section', 'question')

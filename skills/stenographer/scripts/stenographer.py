@@ -404,6 +404,15 @@ def build_digest(content: str, repository: str, key: str) -> str:
     return "\n".join(lines)
 
 
+def escape_event_headers(text: str) -> str:
+    """Prefixes lines that look like an event header with a backslash.
+
+    A pasted transcript fragment in a message must not be read back as a real event
+    (it would add a phantom event, or break the ID sequence and make the file unreadable).
+    """
+    return re.sub(r"(?m)^(?=### \d{4}-\d{2}-\d{2}T)", "\\\\", text)
+
+
 def event_entry(args: argparse.Namespace) -> str:
     parts = [
         f"### {timestamp()} — {args.title.strip()}",
@@ -430,7 +439,8 @@ def event_entry(args: argparse.Namespace) -> str:
         parts.extend(("", f"Command: `{args.command}`"))
     if args.result:
         parts.extend(("", f"Result: {args.result.strip()}"))
-    return "\n".join(parts)
+    # Everything after the header line may carry user-supplied text.
+    return "\n".join((parts[0], escape_event_headers("\n".join(parts[1:]))))
 
 
 def command_show(types: Optional[str], event_id: Optional[str] = None) -> int:

@@ -134,6 +134,7 @@ Don't treat errors, blockers, and disproved hypotheses as noise if they change a
 - For commands, record the command and the outcome: succeeded, failed, or blocked.
 - For errors, record the cause and the next safe step.
 - Never rewrite existing history or delete events.
+- A line of recorded text that looks like an event header (`### 2026-…T…`, for example a pasted transcript fragment) is stored with a leading backslash by the script, so it can't be read back as a real event. Don't undo or work around this; the rest of the text stays verbatim.
 - Don't leave a trailing blank line at the end of the file.
 
 ### Event metadata
