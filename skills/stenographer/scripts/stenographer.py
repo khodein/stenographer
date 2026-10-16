@@ -56,6 +56,10 @@ DIGEST_TITLE_LIMIT = 120
 # segment, except the types that are always needed to restore the context.
 DIGEST_RECENT_EVENTS = 80
 DIGEST_ALWAYS_TYPES = ("user-request", "user-decision", "plan", "blocker")
+# In `context`, a growing section shows its latest entries in full, the ones before them as
+# one-liners, and the oldest as a single count line.
+CONTEXT_FULL_ENTRIES = 15
+CONTEXT_TITLE_ENTRIES = 60
 
 # Transcript key chosen with --name; None means "use the current branch".
 TRANSCRIPT_KEY: Optional[str] = None
@@ -528,38 +532,61 @@ def build_context(content: str, path: Path, repository: str, key: str) -> str:
         f"Branch status per record: {read_field(content, 'Status') or 'unknown'}", "",
         "This is an extract of records, not a check of the current code. The absence of an explicit supersede does not prove it's still current.",
         "Full text: show --event E001 (substitute the ID). Evidence status is set by the author, not computed by the tool.",
-        "For older records the ID is computed positionally; never reorder or delete events.", "",
+        "For older records the ID is computed positionally; never reorder or delete events.",
+        f"Long sections show the latest {CONTEXT_FULL_ENTRIES} entries in full, the {CONTEXT_TITLE_ENTRIES} before them as one-liners, "
+        "and anything older as a count line: open any entry with show --event <ID>.", "",
         "## Original task", "", read_task(content) or "Not set.",
     ]
 
-    def section(title: str, selected: list[dict]) -> None:
+    def entry(event: dict, full: bool) -> None:
+        line_number = content[:content.index(event["block"])].count("\n") + 1
+        lines.append(
+            f"- [{event['id']}]({path}#L{line_number}) · {event['title']} "
+            f"· {event['type']} · evidence: {event['status']}"
+        )
+        if not full:
+            return
+        body = extract_body(event["block"])
+        if body:
+            excerpt = body if len(body) <= 800 else body[:800] + "… [excerpt; full text via show --event]"
+            lines.extend("  " + line for line in excerpt.splitlines())
+        result = re.search(r"(?m)^Result: (.*)", event["block"])
+        command = re.search(r"(?m)^Command: `(.*)`$", event["block"])
+        if command:
+            lines.append("  Command: " + command.group(1))
+        if result:
+            lines.append("  Result: " + result.group(1))
+
+    def section(title: str, selected: list[dict], limited: bool = False, keep_first: bool = False) -> None:
         lines.extend(("", f"## {title}", ""))
         if not selected:
             lines.append("No explicit records; state unknown.")
-        for event in selected:
-            line_number = content[:content.index(event["block"])].count("\n") + 1
+        # A base plan is always shown in full; the limit applies to what follows it.
+        first, rest = (selected[:1], selected[1:]) if limited and keep_first else ([], selected)
+        recent = rest[-CONTEXT_FULL_ENTRIES:] if limited else rest
+        older = rest[:len(rest) - len(recent)]
+        titled = older[-CONTEXT_TITLE_ENTRIES:]
+        folded = older[:len(older) - len(titled)]
+        for event in first:
+            entry(event, full=True)
+        if folded:
+            types = ",".join(sorted({event["type"] for event in folded}))
             lines.append(
-                f"- [{event['id']}]({path}#L{line_number}) · {event['title']} "
-                f"· {event['type']} · evidence: {event['status']}"
+                f"- … {len(folded)} earlier {'entry' if len(folded) == 1 else 'entries'} "
+                f"{folded[0]['id']}–{folded[-1]['id']}; titles and bodies via show --event <ID> or show --type {types}"
             )
-            body = extract_body(event["block"])
-            if body:
-                excerpt = body if len(body) <= 800 else body[:800] + "… [excerpt; full text via show --event]"
-                lines.extend("  " + line for line in excerpt.splitlines())
-            result = re.search(r"(?m)^Result: (.*)", event["block"])
-            command = re.search(r"(?m)^Command: `(.*)`$", event["block"])
-            if command:
-                lines.append("  Command: " + command.group(1))
-            if result:
-                lines.append("  Result: " + result.group(1))
+        for event in titled:
+            entry(event, full=False)
+        for event in recent:
+            entry(event, full=True)
 
-    section("Goals and requirements with no explicit supersede", [e for e in active if e["section"] in {"goal", "requirement"}])
-    section("Decisions with no explicit supersede", [e for e in active if e["type"] in {"decision", "user-decision"}])
-    section("Plans and deltas in recorded order", [e for e in active if e["type"] == "plan"])
-    section("Results marked by the author", [e for e in active if e["section"] == "result"])
+    section("Goals and requirements with no explicit supersede", [e for e in active if e["section"] in {"goal", "requirement"}], limited=True)
+    section("Decisions with no explicit supersede", [e for e in active if e["type"] in {"decision", "user-decision"}], limited=True)
+    section("Plans and deltas in recorded order", [e for e in active if e["type"] == "plan"], limited=True, keep_first=True)
+    section("Results marked by the author", [e for e in active if e["section"] == "result"], limited=True)
     section("Questions and blockers with no explicit supersede", [e for e in active if e["section"] == "question" or e["type"] == "blocker"])
-    section("Hypotheses and proposals", [e for e in active if e["status"] in {"hypothesis", "proposed"}])
-    section("Explicitly stated next steps", [e for e in active if e["section"] == "next-step"])
+    section("Hypotheses and proposals", [e for e in active if e["status"] in {"hypothesis", "proposed"}], limited=True)
+    section("Explicitly stated next steps", [e for e in active if e["section"] == "next-step"], limited=True)
     section("Latest checks and errors (up to 5; not a guarantee of current state)",
             [e for e in active if e["type"] in {"verification", "error"}][-5:])
     section("Latest user messages (up to 5; the rest via show)",

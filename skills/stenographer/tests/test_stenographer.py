@@ -106,17 +106,28 @@ class StenographerTest(BaseCase):
         self.assertIn('L' * 119 + '…', digest)
         self.assertNotIn('L' * 120, digest)
 
-    def build_digest(self, specs):
-        """specs: (type, branch, supersedes) per event; returns the digest of an in-memory transcript."""
+    def big_content(self, specs):
+        """specs: (type, branch, supersedes) per event; returns an in-memory transcript."""
         content = m.header(self.repo, 'repo', 'big', 'Big task')
         for number, (event_type, branch, supersedes) in enumerate(specs, 1):
             args = argparse.Namespace(
                 title=f'{event_type} {number}', type=event_type, actor='a', event_id=f'E{number:03d}',
                 branch=branch, supersedes=supersedes, context_section=None, evidence_status=None,
-                body='x', file=['f.kt'] if event_type == 'code-change' else None,
+                body=f'body {number}', file=['f.kt'] if event_type == 'code-change' else None,
                 symbol=['f.F'] if event_type == 'code-change' else None, command=None, result=None)
             content += '\n\n' + m.event_entry(args)
-        return m.build_digest(content, 'repo', 'big')
+        return content
+
+    def build_digest(self, specs):
+        return m.build_digest(self.big_content(specs), 'repo', 'big')
+
+    def build_context(self, specs):
+        return m.build_context(self.big_content(specs), Path('big.md'), 'repo', 'big')
+
+    @staticmethod
+    def context_section(context, title):
+        block = context.split(f'## {title}', 1)[1].split('\n## ', 1)[0]
+        return block.splitlines()
 
     def test_digest_folds_older_events_but_keeps_always_types(self):
         specs = [('decision', 'main', [])] * 120
@@ -168,6 +179,55 @@ class StenographerTest(BaseCase):
             specs.append(('plan' if number % 7 == 0 else 'decision', 'main', []))
         digest = self.build_digest(specs)
         self.assertEqual(digest.count('- … '), 1)
+
+    def test_context_shows_latest_entries_in_full_and_older_as_one_liners(self):
+        context = self.build_context([('decision', 'main', [])] * 100)
+        lines = self.context_section(context, 'Decisions with no explicit supersede')
+        entries = [line for line in lines if line.startswith('- [E')]
+        self.assertEqual(len(entries), 75)
+        self.assertEqual(len([line for line in lines if line.startswith('- … ')]), 1)
+        self.assertIn('- … 25 earlier entries E001–E025; titles and bodies via show --event <ID> or show --type decision', lines)
+        by_id = {re.match(r'- \[(E\d+)\]', line).group(1): number for number, line in enumerate(lines) if line.startswith('- [E')}
+        self.assertEqual(lines[by_id['E100'] + 1], '  body 100')      # recent: with body
+        self.assertEqual(lines[by_id['E086'] + 1], '  body 86')
+        self.assertTrue(lines[by_id['E085'] + 1].startswith('- [E'))  # one-liner: no body
+        self.assertTrue(lines[by_id['E026'] + 1].startswith('- [E'))
+        self.assertNotIn('E025]', ''.join(lines))                      # folded: not listed at all
+
+    def test_context_limit_boundaries(self):
+        lines = self.context_section(self.build_context([('decision', 'main', [])] * 75), 'Decisions with no explicit supersede')
+        self.assertEqual(len([line for line in lines if line.startswith('- [E')]), 75)
+        self.assertFalse([line for line in lines if line.startswith('- … ')])
+        lines = self.context_section(self.build_context([('decision', 'main', [])] * 76), 'Decisions with no explicit supersede')
+        self.assertIn('- … 1 earlier entry E001–E001; titles and bodies via show --event <ID> or show --type decision', lines)
+        lines = self.context_section(self.build_context([('decision', 'main', [])] * 15), 'Decisions with no explicit supersede')
+        self.assertEqual(len([line for line in lines if line.startswith('  body')]), 15)
+
+    def test_context_always_shows_the_base_plan_in_full(self):
+        context = self.build_context([('plan', 'main', [])] * 41)
+        lines = self.context_section(context, 'Plans and deltas in recorded order')
+        self.assertEqual(lines[lines.index(next(l for l in lines if l.startswith('- [E001]'))) + 1], '  body 1')
+        self.assertEqual(len([line for line in lines if line.startswith('- [E')]), 41)
+        self.assertEqual(len([line for line in lines if line.startswith('  body')]), 16)  # base + latest 15
+        self.assertFalse([line for line in lines if line.startswith('- … ')])
+
+    def test_context_does_not_limit_blockers_checks_and_user_messages(self):
+        context = self.build_context([('blocker', 'main', [])] * 100)
+        lines = self.context_section(context, 'Questions and blockers with no explicit supersede')
+        self.assertEqual(len([line for line in lines if line.startswith('- [E')]), 100)
+        self.assertEqual(len([line for line in lines if line.startswith('  body')]), 100)
+
+    def test_context_ignores_superseded_decisions_when_limiting(self):
+        specs = [('decision', 'main', [])] * 100
+        specs[89] = ('decision', 'main', ['E088'])
+        lines = self.context_section(self.build_context(specs), 'Decisions with no explicit supersede')
+        self.assertEqual(len([line for line in lines if line.startswith('- [E')]), 75)
+        self.assertIn('- … 24 earlier entries E001–E024; titles and bodies via show --event <ID> or show --type decision', lines)
+
+    def test_context_size_is_bounded_for_long_transcripts(self):
+        types = ['decision', 'plan', 'decision', 'user-decision', 'code-change']
+        context = self.build_context([(types[i % 5], 'main', []) for i in range(1500)])
+        self.assertLess(len(context), 40000)
 
     def test_digest_size_is_bounded_for_long_transcripts(self):
         types = ['decision', 'code-change', 'verification', 'user-addition', 'external-action']

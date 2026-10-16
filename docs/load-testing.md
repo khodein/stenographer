@@ -51,16 +51,18 @@ The exit code is 0 on `RESULT: PASS` and 1 on `RESULT: FAIL`; the problems are l
 
 Lines starting with `METRIC` in the output: average append latency per phase, transcript size, digest size in characters and approximate tokens (characters / 4), number of event lines, folded lines and branch markers in the digest, `context` size and the five largest `context` sections, `list` and digest-rebuild time, and the digest and `context` as a share of the transcript.
 
-## Reference numbers (last updated with commit `32c40a8`, seed 7, 1,255 events)
+## Reference numbers (after the `context` cap, seeds 7 and 21, 1,255 events)
 
 | Metric | Value |
 | --- | --- |
-| Append latency | 55 ms at 50 events, 68 ms at 300, 106 ms at 1,200 (grows slowly and linearly) |
-| Transcript | about 0.8 MB |
-| Digest | 14,600–17,000 chars (about 3,700–4,200 tokens) across seeds 7, 21, 99; 29–30 folded lines |
-| `context` | 107,000–122,000 chars (about 27,000–31,000 tokens); about 85% of it is the "Decisions" section |
+| Append latency | 55 ms at 50 events, 68–72 ms at 300, 107–109 ms at 1,200 (grows slowly and linearly) |
+| Transcript | 0.8–0.9 MB |
+| Digest | 15,400–16,800 chars (about 3,900–4,200 tokens); 29 folded lines |
+| `context` | 29,900–33,900 chars (about 7,500–8,500 tokens); the "Decisions" section is about 14,600 chars (it was about 90,000 before the cap) |
 | `list`, digest rebuild | about 80 ms each |
 | Whole run | about 2 minutes |
+
+Seed 99 was not re-run after the `context` cap.
 
 Treat a move of more than about 30% from these numbers as a regression to investigate, even when the run passes. Update this table in the same commit as a change that moves the numbers on purpose.
 

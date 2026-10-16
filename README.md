@@ -77,7 +77,7 @@ python3 ~/.local/share/skills/stenographer/scripts/stenographer.py resume
 python3 ~/.local/share/skills/stenographer/scripts/stenographer.py finish
 ```
 
-- `context` builds a read-only, deterministic extract of the transcript (goals, decisions, plans, open questions, recent checks) without touching the file — useful for resuming a task without re-reading the whole log.
+- `context` builds a read-only, deterministic extract of the transcript (goals, decisions, plans, open questions, recent checks) without touching the file — useful for resuming a task without re-reading the whole log. Long sections show the latest entries in full and older ones as one-liners or a count, so its size stays modest on long tasks.
 - `list` prints the repository's transcripts (key, status, last update, branches, task) so you can pick one to continue. Pass `--name <key>` to every command to work with a transcript other than the one named after the current branch; `init` refuses a name already taken by a different task.
 - `<key>.digest.md` is a derived, token-cheap map of the transcript: one line per active event (`E012 · 10-16 10:58 · decision · title`; beyond the latest 80, older events are folded into one summary line per branch segment, so the digest stays small even for long tasks), so an agent can scan it and open only the events it needs with `show --event`. It is updated automatically after every `init`, `append`, `resume`, and `finish`; `digest` rebuilds it manually.
 - `index` regenerates a repository-wide `INDEX.md` listing every stored transcript with its status.
