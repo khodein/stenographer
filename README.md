@@ -96,6 +96,8 @@ See `skills/stenographer/SKILL.md` for the full agent-facing rules (what to reco
 python3 -m unittest skills/stenographer/tests/test_stenographer.py
 ```
 
+For a long-transcript check (about two minutes) follow [docs/load-testing.md](docs/load-testing.md).
+
 ## License
 
 MIT
