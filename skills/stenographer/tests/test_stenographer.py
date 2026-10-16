@@ -464,6 +464,15 @@ class CommandsTest(BaseCase):
         self.assertIn('`shared`', index)
         self.assertIn('`test`', index)
 
+    def test_detached_head_error_points_to_name_and_list(self):
+        self.git('commit', '--allow-empty', '-m', 'c', '-q')
+        self.git('checkout', '--detach', '-q')
+        result = subprocess.run([sys.executable, str(SCRIPT), 'context'], cwd=self.repo,
+                                env=self.env, text=True, capture_output=True)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('--name <key>', result.stderr)
+        self.assertIn('`list`', result.stderr)
+
     def test_branch_slash_becomes_double_underscore(self):
         self.git('checkout', '-b', 'feature/x', '-q')
         self.run_cli('init', '--task', 'Slash branch')

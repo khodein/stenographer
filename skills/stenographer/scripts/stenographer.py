@@ -79,7 +79,10 @@ def git_context() -> tuple[Path, str, str]:
     repository_root = Path(run_git("rev-parse", "--show-toplevel")).resolve()
     branch = run_git("branch", "--show-current")
     if not branch:
-        raise RuntimeError("Current HEAD is not on a named Git branch")
+        raise RuntimeError(
+            "Current HEAD is not on a named Git branch: pass --name <key> "
+            "(`list` shows the existing transcripts)"
+        )
     return repository_root, repository_root.name, branch
 
 
