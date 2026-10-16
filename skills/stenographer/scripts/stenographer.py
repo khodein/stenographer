@@ -34,6 +34,27 @@ EVENT_TYPES = (
     "external-action",
 )
 
+# Event types listed in the digest; verification/error are limited to the most recent ones.
+DIGEST_TYPES = (
+    "user-request",
+    "user-addition",
+    "user-decision",
+    "plan",
+    "decision",
+    "code-change",
+    "blocker",
+    "commit",
+    "push",
+    "external-action",
+)
+DIGEST_SECTIONS = ("question", "next-step")
+DIGEST_RECENT_TYPES = ("verification", "error")
+DIGEST_RECENT_LIMIT = 5
+DIGEST_TITLE_LIMIT = 120
+
+# Transcript key chosen with --name; None means "use the current branch".
+TRANSCRIPT_KEY: Optional[str] = None
+
 SECRET_PATTERNS = (
     re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
     re.compile(r"(?i)authorization:\s*bearer\s+\S+"),
@@ -62,20 +83,47 @@ def git_context() -> tuple[Path, str, str]:
     return repository_root, repository_root.name, branch
 
 
+def current_branch() -> str:
+    """The branch an event was recorded on; "detached" when HEAD isn't on a named branch."""
+    return run_git("branch", "--show-current").replace("`", "'") or "detached"
+
+
 def safe_name(value: str) -> str:
     return value.replace("/", "__")
 
 
+def validate_key(key: str) -> str:
+    key = key.strip()
+    if not key or "\n" in key or "\r" in key or "\\" in key:
+        raise RuntimeError("--name must be a non-empty single-line name without backslashes")
+    if key.startswith(".") or ".." in key or key.endswith(".digest") or key.lower() == "index":
+        raise RuntimeError(f"--name {key!r} is reserved or unsafe: don't start it with '.', include '..', end with '.digest', or use 'INDEX'")
+    return key
+
+
+def missing_transcript_error(key: str) -> RuntimeError:
+    return RuntimeError(
+        f"Transcript '{key}' does not exist. Create it with `init --task \"...\"` "
+        "(add --name <key> to choose a name other than the current branch), "
+        "or pass --name of an existing one; `list` shows the existing transcripts"
+    )
+
+
 def transcript_path() -> tuple[Path, Path, str, str]:
-    repository_root, repository, branch = git_context()
+    """Returns the transcript path, repository root, repository name, and the transcript key (--name or the branch)."""
+    if TRANSCRIPT_KEY is None:
+        repository_root, repository, key = git_context()
+    else:
+        repository_root = Path(run_git("rev-parse", "--show-toplevel")).resolve()
+        repository, key = repository_root.name, validate_key(TRANSCRIPT_KEY)
     transcript_root = Path(
         os.environ.get(
             "STENOGRAPHER_ROOT",
             Path.home() / ".config" / "ai-rules" / "stenographer",
         )
     ).expanduser()
-    path = transcript_root / safe_name(repository) / f"{safe_name(branch)}.md"
-    return path, repository_root, repository, branch
+    path = transcript_root / safe_name(repository) / f"{safe_name(key)}.md"
+    return path, repository_root, repository, key
 
 
 def timestamp() -> str:
@@ -110,13 +158,13 @@ def with_lock(path: Path):
     return lock_file
 
 
-def header(repository_root: Path, repository: str, branch: str, task: str) -> str:
+def header(repository_root: Path, repository: str, key: str, task: str) -> str:
     now = timestamp()
     return (
-        f"# {branch}\n\n"
+        f"# {key}\n\n"
         f"- Repository: `{repository}`\n"
         f"- Path: `{repository_root}`\n"
-        f"- Branch: `{branch}`\n"
+        f"- Key: `{key}`\n"
         f"- Created: `{now}`\n"
         f"- Updated: `{now}`\n"
         f"- Status: `in progress`\n\n"
@@ -183,6 +231,7 @@ def parse_events(content: str) -> list[dict]:
                 "block": block,
                 # Older events get a stable positional number without migrating the file.
                 "id": metadata(block, "ID") or f"E{index + 1:03d}",
+                "branch": metadata(block, "Branch"),
                 "supersedes": metadata(block, "Supersedes").split(),
                 "section": metadata(block, "Section"),
                 "status": metadata(block, "Evidence") or "not set",
@@ -235,11 +284,20 @@ def read_task(content: str) -> str:
     return match.group(1).strip() if match else ""
 
 
+def shorten_title(title: str) -> str:
+    return title if len(title) <= DIGEST_TITLE_LIMIT else title[: DIGEST_TITLE_LIMIT - 1].rstrip() + "…"
+
+
+def short_time(value: str) -> str:
+    match = re.match(r"\d{4}-(\d{2}-\d{2})T(\d{2}:\d{2})", value)
+    return f"{match[1]} {match[2]}" if match else value
+
+
 def digest_path_for(path: Path) -> Path:
     return path.with_name(f"{path.stem}.digest.md")
 
 
-def build_digest(content: str, repository: str, branch: str) -> str:
+def build_digest(content: str, repository: str, key: str) -> str:
     status = read_field(content, "Status")
     created = read_field(content, "Created")
     updated = read_field(content, "Updated")
@@ -247,10 +305,22 @@ def build_digest(content: str, repository: str, branch: str) -> str:
     events = parse_events(content)
 
     replaced = superseded_events(events)
+    replacements: dict[str, list[str]] = {}
+    for event in events:
+        for target in event["supersedes"]:
+            replacements.setdefault(event["id"], []).append(target)
+
     active = [event for event in events if event["id"] not in replaced]
-    decisions = [event for event in active if event["type"] in {"decision", "user-decision"}]
-    blockers = [event for event in active if event["type"] == "blocker"]
-    plans = [event for event in active if event["type"] == "plan"]
+    recent_checks = {
+        event["id"] for event in [e for e in active if e["type"] in DIGEST_RECENT_TYPES][-DIGEST_RECENT_LIMIT:]
+    }
+    listed = [
+        event
+        for event in active
+        if event["type"] in DIGEST_TYPES
+        or event["section"] in DIGEST_SECTIONS
+        or event["id"] in recent_checks
+    ]
 
     files: dict[str, None] = {}
     symbols: dict[str, None] = {}
@@ -262,71 +332,49 @@ def build_digest(content: str, repository: str, branch: str) -> str:
         for item in extract_list_section(event["block"], "Symbols"):
             symbols[item] = None
 
-    counts: dict[str, int] = {}
-    for event in events:
-        counts[event["type"]] = counts.get(event["type"], 0) + 1
-
     lines = [
-        f"# Digest: {branch}",
+        f"# Digest: {key}",
         "",
         f"- Repository: `{repository}`",
-        f"- Branch: `{branch}`",
+        f"- Key: `{key}`",
         f"- Status: `{status}`",
         f"- Created: `{created}`",
         f"- Updated: `{updated}`",
         f"- Total events: `{len(events)}`",
         "",
-        "> Derived file, not the source of truth. If it disagrees with or lacks enough "
-        "detail for a decision, check the full transcript `"
-        f"{branch}.md`. Regenerate with the `digest` command.",
+        "> Derived file, not the source of truth. One line per active event: "
+        "`<ID> · <time> · <type> · <title>`. For details run `show --event <ID>`; "
+        "if it disagrees with or lacks enough detail, check the full transcript `"
+        f"{safe_name(key)}.md`. Regenerate with the `digest` command.",
         "",
         "## Task",
         "",
         task,
         "",
-        "## Event counts by type",
+        "## Affected files",
         "",
     ]
-    lines.extend(f"- `{event_type}`: {counts[event_type]}" for event_type in EVENT_TYPES if event_type in counts)
-    lines.append("")
-
-    lines.append("## Decisions")
-    lines.append("")
-    if decisions:
-        lines.extend(f"- {event['timestamp']} — {event['title']}" for event in decisions)
-    else:
-        lines.append("_none_")
-    lines.append("")
-
-    lines.append("## Blockers")
-    lines.append("")
-    if blockers:
-        lines.extend(f"- {event['timestamp']} — {event['title']}" for event in blockers)
-    else:
-        lines.append("_none_")
-    lines.append("")
-
-    lines.append("## Affected files")
-    lines.append("")
     if files:
         lines.extend(f"- `{item}`" for item in files)
     else:
         lines.append("_none_")
-    lines.append("")
-
-    lines.append("## Affected symbols")
-    lines.append("")
+    lines.extend(["", "## Affected symbols", ""])
     if symbols:
         lines.extend(f"- `{item}`" for item in symbols)
     else:
         lines.append("_none_")
-    lines.append("")
-
-    lines.append("## Plan and its deltas (in recorded order)")
-    lines.append("")
-    if plans:
-        for plan in plans:
-            lines.extend((f"_{plan['id']} · {plan['timestamp']}_", "", extract_body(plan["block"]), ""))
+    lines.extend(["", "## Events", ""])
+    if listed:
+        shown_branch = ""
+        for event in listed:
+            if event["branch"] and event["branch"] != shown_branch:
+                shown_branch = event["branch"]
+                lines.append(f"_branch: {shown_branch}_")
+            note = f" (supersedes {', '.join(replacements[event['id']])})" if event["id"] in replacements else ""
+            lines.append(
+                f"- {event['id']} · {short_time(event['timestamp'])} · {event['type']} · "
+                f"{shorten_title(event['title'])}{note}"
+            )
     else:
         lines.append("_none_")
 
@@ -339,6 +387,7 @@ def event_entry(args: argparse.Namespace) -> str:
         f"- Type: `{args.type}`",
         f"- Author: `{args.actor}`",
         f"- ID: `{args.event_id}`",
+        f"- Branch: `{args.branch}`",
     ]
     if args.supersedes:
         parts.append(f"- Supersedes: `{' '.join(args.supersedes)}`")
@@ -391,12 +440,12 @@ def command_show(types: Optional[str], event_id: Optional[str] = None) -> int:
     return 0
 
 
-def build_context(content: str, path: Path, repository: str, branch: str) -> str:
+def build_context(content: str, path: Path, repository: str, key: str) -> str:
     events = parse_events(content)
     replaced = superseded_events(events)
     active = [event for event in events if event["id"] not in replaced]
     lines = [
-        f"# Context: {repository} / {branch}", "",
+        f"# Context: {repository} / {key}", "",
         f"Source: {path}",
         f"Updated in transcript: {read_field(content, 'Updated') or 'unknown'}",
         f"Branch status per record: {read_field(content, 'Status') or 'unknown'}", "",
@@ -457,58 +506,107 @@ def build_context(content: str, path: Path, repository: str, branch: str) -> str
 
 
 def command_context() -> int:
-    path, _, repository, branch = transcript_path()
+    path, _, repository, key = transcript_path()
     if not path.exists():
-        raise RuntimeError("Transcript does not exist. Run init first")
-    print(build_context(path.read_text(encoding="utf-8"), path, repository, branch))
+        raise missing_transcript_error(key)
+    print(build_context(path.read_text(encoding="utf-8"), path, repository, key))
     return 0
 
 
-def command_digest() -> int:
-    path, _, repository, branch = transcript_path()
-    if not path.exists():
-        raise RuntimeError("Transcript does not exist. Run init first")
-    content = path.read_text(encoding="utf-8")
-    digest = build_digest(content, repository, branch)
+def write_digest(path: Path, content: str, repository: str, key: str) -> Path:
     digest_file = digest_path_for(path)
+    digest = build_digest(content, repository, key)
     lock_file = with_lock(digest_file)
     try:
         atomic_write(digest_file, digest)
     finally:
         lock_file.close()
+    return digest_file
+
+
+def refresh_digest(path: Path, content: str, repository: str, key: str) -> None:
+    # The transcript is already saved; a failed derived digest must not fail the command.
+    try:
+        write_digest(path, content, repository, key)
+    except Exception as error:
+        print(f"Warning: digest not updated: {error}", file=sys.stderr)
+
+
+def command_digest() -> int:
+    path, _, repository, key = transcript_path()
+    if not path.exists():
+        raise missing_transcript_error(key)
+    digest_file = write_digest(path, path.read_text(encoding="utf-8"), repository, key)
     print(f"Digest updated: {digest_file}")
     return 0
 
 
-def command_index() -> int:
-    _, repository, _branch = git_context()
+def repository_transcripts_dir() -> tuple[str, Path]:
+    repository = Path(run_git("rev-parse", "--show-toplevel")).resolve().name
     transcript_root = Path(
         os.environ.get(
             "STENOGRAPHER_ROOT",
             Path.home() / ".config" / "ai-rules" / "stenographer",
         )
     ).expanduser()
-    repo_dir = transcript_root / safe_name(repository)
+    return repository, transcript_root / safe_name(repository)
+
+
+def command_list() -> int:
+    repository, repo_dir = repository_transcripts_dir()
+    entries = []
+    for transcript_file in repo_dir.glob("*.md") if repo_dir.exists() else ():
+        if transcript_file.name == "INDEX.md" or transcript_file.name.endswith(".digest.md"):
+            continue
+        content = transcript_file.read_text(encoding="utf-8")
+        task = read_task(content).splitlines()[0] if read_task(content) else ""
+        try:
+            branches = list(dict.fromkeys(event["branch"] for event in parse_events(content) if event["branch"]))
+        except RuntimeError:
+            branches = ["?"]
+        entries.append(
+            (
+                read_field(content, "Key") or transcript_file.stem,
+                read_field(content, "Status"),
+                read_field(content, "Updated"),
+                ", ".join(branches).replace("|", "\\|"),
+                task.replace("|", "\\|"),
+            )
+        )
+    if not entries:
+        print(f"No transcripts for repository {repository}. Create one with `init --task \"...\" [--name <key>]`")
+        return 0
+    print(f"Transcripts of repository {repository} (newest first). Continue one by passing --name <key> to every command:")
+    print()
+    print("| Key | Status | Updated | Branches | Task |")
+    print("| --- | --- | --- | --- | --- |")
+    for key, status, updated, branches, task in sorted(entries, key=lambda entry: entry[2], reverse=True):
+        print(f"| `{key}` | {status} | {updated} | {branches} | {task} |")
+    return 0
+
+
+def command_index() -> int:
+    repository, repo_dir = repository_transcripts_dir()
     if not repo_dir.exists():
         raise RuntimeError(f"Repository transcript directory not found: {repo_dir}")
 
     entries = []
-    for branch_file in sorted(repo_dir.glob("*.md")):
-        if branch_file.name == "INDEX.md" or branch_file.name.endswith(".digest.md"):
+    for transcript_file in sorted(repo_dir.glob("*.md")):
+        if transcript_file.name == "INDEX.md" or transcript_file.name.endswith(".digest.md"):
             continue
-        branch_content = branch_file.read_text(encoding="utf-8")
-        status = read_field(branch_content, "Status")
-        updated = read_field(branch_content, "Updated")
-        task = read_task(branch_content).splitlines()[0] if read_task(branch_content) else ""
-        entries.append((branch_file.stem, status, updated, task.replace("|", "\\|")))
+        transcript_content = transcript_file.read_text(encoding="utf-8")
+        status = read_field(transcript_content, "Status")
+        updated = read_field(transcript_content, "Updated")
+        task = read_task(transcript_content).splitlines()[0] if read_task(transcript_content) else ""
+        entries.append((transcript_file.stem, status, updated, task.replace("|", "\\|")))
 
     lines = [
         f"# Repository transcripts: {repository}",
         "",
-        "| Branch | Status | Updated | Task |",
+        "| Key | Status | Updated | Task |",
         "| --- | --- | --- | --- |",
     ]
-    lines.extend(f"| `{branch}` | {status} | {updated} | {task} |" for branch, status, updated, task in entries)
+    lines.extend(f"| `{key}` | {status} | {updated} | {task} |" for key, status, updated, task in entries)
 
     index_file = repo_dir / "INDEX.md"
     lock_file = with_lock(index_file)
@@ -520,15 +618,47 @@ def command_index() -> int:
     return 0
 
 
+def ensure_key_is_free(path: Path, key: str, task: str) -> None:
+    """Rejects a key that would land in someone else's transcript; the same key with the same task is fine."""
+    for other in path.parent.glob("*.md"):
+        if other.name == "INDEX.md" or other.name.endswith(".digest.md"):
+            continue
+        if other.stem.lower() == path.stem.lower() and other.stem != path.stem:
+            raise RuntimeError(
+                f"Name '{key}' conflicts with the existing transcript '{other.stem}' "
+                "(names that differ only by case are treated as the same); choose another --name"
+            )
+    if not path.exists():
+        return
+    content = path.read_text(encoding="utf-8")
+    stored_key = read_field(content, "Key")
+    if stored_key != key:
+        raise RuntimeError(
+            f"Name '{key}' maps to the same file as the existing transcript '{stored_key}'; choose another --name"
+        )
+    stored_task = read_task(content).strip()
+    if stored_task != task.strip():
+        first_line = stored_task.splitlines()[0] if stored_task else ""
+        raise RuntimeError(
+            f"Name '{key}' is taken by a transcript with another task: \"{first_line}\". "
+            "Continue it without init, or choose another --name for a new task (`list` shows the existing ones)"
+        )
+
+
 def command_init(task: str) -> int:
-    path, repository_root, repository, branch = transcript_path()
+    path, repository_root, repository, key = transcript_path()
     validate_text([task])
     lock_file = with_lock(path)
     try:
+        ensure_key_is_free(path, key, task)
         if path.exists():
+            if not digest_path_for(path).exists():
+                refresh_digest(path, path.read_text(encoding="utf-8"), repository, key)
             print(f"Transcript already exists: {path}")
             return 0
-        atomic_write(path, header(repository_root, repository, branch, task))
+        content = header(repository_root, repository, key, task)
+        atomic_write(path, content)
+        refresh_digest(path, content, repository, key)
     finally:
         lock_file.close()
     print(f"Transcript created: {path}")
@@ -572,7 +702,7 @@ def last_turn_usage() -> Optional[str]:
 
 
 def command_append(args: argparse.Namespace) -> int:
-    path, _, _, _ = transcript_path()
+    path, _, repository, key = transcript_path()
     if args.body_file:
         if args.body is not None:
             raise RuntimeError(
@@ -618,7 +748,7 @@ def command_append(args: argparse.Namespace) -> int:
             "function name, or 'not applicable: <file type>' for files without a code symbol"
         )
     if not path.exists():
-        raise RuntimeError("Transcript does not exist. Run init first")
+        raise missing_transcript_error(key)
     lock_file = with_lock(path)
     try:
         content = path.read_text(encoding="utf-8").rstrip("\n")
@@ -630,8 +760,11 @@ def command_append(args: argparse.Namespace) -> int:
             raise RuntimeError(f"Supersede targets not found: {', '.join(sorted(unknown))}")
         number = max((int(event_id[1:]) for event_id in ids), default=0) + 1
         args.event_id = f"E{number:03d}"
+        args.branch = current_branch()
         content = update_timestamp(content)
-        atomic_write(path, f"{content}\n\n{event_entry(args)}")
+        content = f"{content}\n\n{event_entry(args)}"
+        atomic_write(path, content)
+        refresh_digest(path, content, repository, key)
     finally:
         lock_file.close()
     print(f"Added event {args.event_id}: {path}")
@@ -639,15 +772,16 @@ def command_append(args: argparse.Namespace) -> int:
 
 
 def command_resume() -> int:
-    path, _, _, _ = transcript_path()
+    path, _, repository, key = transcript_path()
     if not path.exists():
-        raise RuntimeError("Transcript does not exist. Run init first")
+        raise missing_transcript_error(key)
     lock_file = with_lock(path)
     try:
         content = path.read_text(encoding="utf-8").rstrip("\n")
         content = update_status(content, "in progress")
         content = update_timestamp(content)
         atomic_write(path, content)
+        refresh_digest(path, content, repository, key)
     finally:
         lock_file.close()
     print("Resumed work on the transcript: in progress")
@@ -655,18 +789,19 @@ def command_resume() -> int:
 
 
 def command_finish(status: str) -> int:
-    path, _, _, _ = transcript_path()
+    path, _, repository, key = transcript_path()
     status = status.strip()
     if not status:
         raise RuntimeError("Finish status must not be empty")
     if not path.exists():
-        raise RuntimeError("Transcript does not exist. Run init first")
+        raise missing_transcript_error(key)
     lock_file = with_lock(path)
     try:
         content = path.read_text(encoding="utf-8").rstrip("\n")
         content = update_status(content, status)
         content = update_timestamp(content)
         atomic_write(path, content)
+        refresh_digest(path, content, repository, key)
     finally:
         lock_file.close()
     print(f"Status updated: {status}")
@@ -674,10 +809,15 @@ def command_finish(status: str) -> int:
 
 
 def parser() -> argparse.ArgumentParser:
-    root = argparse.ArgumentParser(description="AI agent work stenographer for a Git branch")
+    root = argparse.ArgumentParser(description="AI agent work stenographer for a task transcript")
     commands = root.add_subparsers(dest="action", required=True)
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument(
+        "--name",
+        help="Transcript key (file name) instead of the current Git branch; pass it on every command for that transcript",
+    )
 
-    show = commands.add_parser("show", help="Show the current branch transcript")
+    show = commands.add_parser("show", parents=[common], help="Show the transcript")
     show.add_argument(
         "--type",
         dest="types",
@@ -685,10 +825,10 @@ def parser() -> argparse.ArgumentParser:
     )
     show.add_argument("--event", help="Show the full event by ID, e.g. E001")
 
-    init = commands.add_parser("init", help="Create the current branch's transcript")
+    init = commands.add_parser("init", parents=[common], help="Create the transcript")
     init.add_argument("--task", required=True, help="Original task description")
 
-    append = commands.add_parser("append", help="Add an event")
+    append = commands.add_parser("append", parents=[common], help="Add an event")
     append.add_argument("--type", required=True, choices=EVENT_TYPES)
     append.add_argument("--title", required=True)
     append.add_argument(
@@ -721,21 +861,25 @@ def parser() -> argparse.ArgumentParser:
     append.add_argument("--context-section", dest="context_section", choices=CONTEXT_SECTIONS)
     append.add_argument("--evidence-status", dest="evidence_status", choices=("confirmed", "hypothesis", "proposed"))
 
-    commands.add_parser("context", help="Extract context without modifying the transcript")
+    commands.add_parser("context", parents=[common], help="Extract context without modifying the transcript")
 
-    commands.add_parser("digest", help="Regenerate the current branch's derived digest")
+    commands.add_parser("digest", parents=[common], help="Regenerate the transcript's derived digest")
 
-    commands.add_parser("index", help="Regenerate the current repository's branch index")
+    commands.add_parser("list", help="List the transcripts of the current repository (read-only)")
 
-    commands.add_parser("resume", help="Resume work on an existing transcript")
+    commands.add_parser("index", help="Regenerate the current repository's transcript index")
 
-    finish = commands.add_parser("finish", help="Mark work on the branch as finished")
+    commands.add_parser("resume", parents=[common], help="Resume work on an existing transcript")
+
+    finish = commands.add_parser("finish", parents=[common], help="Mark work on the transcript as finished")
     finish.add_argument("--status", default="done", help="Final transcript status")
     return root
 
 
 def main() -> int:
     args = parser().parse_args()
+    global TRANSCRIPT_KEY
+    TRANSCRIPT_KEY = getattr(args, "name", None)
     try:
         if args.action == "show":
             if args.types and args.event:
@@ -749,6 +893,8 @@ def main() -> int:
             return command_append(args)
         if args.action == "digest":
             return command_digest()
+        if args.action == "list":
+            return command_list()
         if args.action == "index":
             return command_index()
         if args.action == "resume":

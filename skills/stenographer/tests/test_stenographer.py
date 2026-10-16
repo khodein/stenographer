@@ -84,9 +84,36 @@ class StenographerTest(BaseCase):
         self.run_cli('append', '--type', 'user-decision', '--actor', 'user', '--title', "User's choice", '--body', 'yes')
         self.run_cli('digest')
         digest = self.log.with_name('test.digest.md').read_text()
-        self.assertIn('Full plan', digest)
-        self.assertIn('+ Addition', digest)
-        self.assertIn("User's choice", digest)
+        self.assertIn('E001 · ', digest)
+        self.assertIn('· plan · Plan', digest)
+        self.assertIn('· plan · Delta', digest)
+        self.assertIn("· user-decision · User's choice", digest)
+        self.assertNotIn('Full plan', digest)
+
+    def test_digest_lists_active_events_with_ids(self):
+        self.append('First decision')
+        self.append('Second decision', '--supersedes', 'E001')
+        self.run_cli('append', '--type', 'tool-call', '--title', 'Noisy call', '--body', 'x')
+        self.run_cli('append', '--type', 'decision', '--title', 'L' * 200, '--body', 'x')
+        self.run_cli('digest')
+        digest = self.log.with_name('test.digest.md').read_text()
+        self.assertNotIn('First decision', digest)
+        self.assertIn('E002 · ', digest)
+        self.assertRegex(digest, r'- E002 · \d{2}-\d{2} \d{2}:\d{2} · decision · ')
+        self.assertIn('Second decision (supersedes E001)', digest)
+        self.assertNotIn('Noisy call', digest)
+        self.assertIn('L' * 119 + '…', digest)
+        self.assertNotIn('L' * 120, digest)
+
+    def test_digest_limits_recent_checks(self):
+        for n in range(7):
+            self.run_cli('append', '--type', 'verification', '--title', f'Check {n}',
+                         '--command', 'c', '--result', 'ok')
+        self.run_cli('digest')
+        digest = self.log.with_name('test.digest.md').read_text()
+        self.assertNotIn('Check 1\n', digest)
+        self.assertIn('Check 2', digest)
+        self.assertIn('Check 6', digest)
 
     def test_context_unknown_state_and_verification(self):
         context = self.run_cli('context')
@@ -155,8 +182,31 @@ class CommandsTest(BaseCase):
         self.assertIn('Context check', content)
         self.assertIn('in progress', content)
         before = self.log.read_bytes()
-        self.assertIn('already exists', self.run_cli('init', '--task', 'Another task'))
+        self.assertIn('already exists', self.run_cli('init', '--task', ' Context check '))
         self.assertEqual(self.log.read_bytes(), before)
+
+    def test_init_rejects_taken_name_with_another_task(self):
+        before = self.log.read_bytes()
+        result = subprocess.run([sys.executable, str(SCRIPT), 'init', '--task', 'Another task'], cwd=self.repo,
+                                env=self.env, text=True, capture_output=True)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('taken by a transcript with another task', result.stderr)
+        self.assertIn('Context check', result.stderr)
+        self.assertEqual(self.log.read_bytes(), before)
+
+    def test_init_rejects_names_mapping_to_the_same_file(self):
+        self.run_cli('init', '--task', 'x', '--name', 'feature/cache')
+        before = (self.root / 'logs' / 'repo' / 'feature__cache.md').read_bytes()
+        self.run_cli('init', '--task', 'x', '--name', 'feature__cache', ok=False)
+        self.assertEqual((self.root / 'logs' / 'repo' / 'feature__cache.md').read_bytes(), before)
+        self.run_cli('init', '--task', 'x', '--name', 'feature/cache')
+
+    def test_init_rejects_names_differing_only_by_case(self):
+        self.run_cli('init', '--task', 'x', '--name', 'Shared')
+        self.run_cli('init', '--task', 'x', '--name', 'shared', ok=False)
+        self.run_cli('init', '--task', 'x', '--name', 'SHARED', ok=False)
+        names = sorted(p.name for p in (self.root / 'logs' / 'repo').glob('*.md') if 'digest' not in p.name)
+        self.assertEqual(names, ['Shared.md', 'test.md'])
 
     def test_commands_fail_without_transcript(self):
         self.log.unlink()
@@ -221,6 +271,36 @@ class CommandsTest(BaseCase):
         self.assertIn('Status: `in progress`', self.log.read_text())
         self.run_cli('finish', '--status', '  ', ok=False)
 
+    def test_digest_is_created_and_updated_automatically(self):
+        digest = self.log.with_name('test.digest.md')
+        self.assertIn('Context check', digest.read_text())
+        self.append('Auto decision')
+        self.assertIn('Auto decision', digest.read_text())
+        self.run_cli('finish', '--status', 'done')
+        self.assertIn('Status: `done`', digest.read_text())
+        self.run_cli('resume')
+        self.assertIn('Status: `in progress`', digest.read_text())
+
+    def test_resume_and_init_restore_missing_digest(self):
+        digest = self.log.with_name('test.digest.md')
+        digest.unlink()
+        self.run_cli('init', '--task', 'Context check')
+        self.assertTrue(digest.exists())
+        digest.write_text('stale')
+        self.run_cli('resume')
+        self.assertIn('Context check', digest.read_text())
+
+    def test_digest_failure_does_not_fail_append(self):
+        digest = self.log.with_name('test.digest.md')
+        digest.unlink()
+        digest.mkdir()
+        result = subprocess.run([sys.executable, str(SCRIPT), 'append', '--type', 'decision',
+                                 '--title', 'Kept', '--body', 'x'], cwd=self.repo,
+                                env=self.env, text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('digest not updated', result.stderr)
+        self.assertIn('Kept', self.log.read_text())
+
     def test_digest_is_regenerated(self):
         self.append('Digest decision')
         self.run_cli('digest')
@@ -247,6 +327,115 @@ class CommandsTest(BaseCase):
         self.git('commit', '--allow-empty', '-m', 'c', '-q')
         self.git('checkout', '--detach', '-q')
         self.run_cli('context', ok=False)
+
+    def test_header_uses_key_instead_of_branch(self):
+        content = self.log.read_text()
+        self.assertIn('- Key: `test`', content)
+        self.assertNotIn('- Branch:', content)
+        self.assertIn('- Key: `test`', self.log.with_name('test.digest.md').read_text())
+
+    def test_explicit_name_creates_separate_transcript(self):
+        self.run_cli('init', '--task', 'Shared task', '--name', 'davai-davai')
+        named = self.root / 'logs' / 'repo' / 'davai-davai.md'
+        self.assertIn('- Key: `davai-davai`', named.read_text())
+        self.run_cli('append', '--type', 'decision', '--title', 'Named decision', '--body', 'x', '--name', 'davai-davai')
+        self.assertIn('Named decision', named.read_text())
+        self.assertNotIn('Named decision', self.log.read_text())
+        self.assertIn('Named decision', named.with_name('davai-davai.digest.md').read_text())
+        self.assertIn('Named decision', self.run_cli('context', '--name', 'davai-davai'))
+        self.assertIn('Named decision', self.run_cli('show', '--name', 'davai-davai'))
+        self.run_cli('finish', '--name', 'davai-davai')
+        self.assertIn('Status: `done`', named.read_text())
+        self.assertIn('Status: `in progress`', self.log.read_text())
+
+    def test_named_transcript_works_across_branches_and_detached_head(self):
+        self.run_cli('init', '--task', 'Shared task', '--name', 'shared')
+        self.git('commit', '--allow-empty', '-m', 'c', '-q')
+        self.git('checkout', '--detach', '-q')
+        self.run_cli('append', '--type', 'decision', '--title', 'Detached ok', '--body', 'x', '--name', 'shared')
+        self.assertIn('Detached ok', (self.root / 'logs' / 'repo' / 'shared.md').read_text())
+
+    def test_missing_named_transcript_explains_how_to_create_it(self):
+        result = subprocess.run([sys.executable, str(SCRIPT), 'resume', '--name', 'nope'], cwd=self.repo,
+                                env=self.env, text=True, capture_output=True)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("Transcript 'nope' does not exist", result.stderr)
+        self.assertIn('init', result.stderr)
+        self.assertIn('--name', result.stderr)
+
+    def test_unsafe_names_are_rejected(self):
+        for name in ('', '  ', '.hidden', 'a..b', '..', 'x.digest', 'INDEX', 'index', 'a\\b'):
+            self.run_cli('init', '--task', 'x', '--name', name, ok=False)
+        self.assertEqual(sorted(p.name for p in (self.root / 'logs' / 'repo').glob('*.md')), ['test.digest.md', 'test.md'])
+
+    def test_name_with_slash_becomes_double_underscore(self):
+        self.run_cli('init', '--task', 'x', '--name', 'feature/cache')
+        self.assertTrue((self.root / 'logs' / 'repo' / 'feature__cache.md').exists())
+
+    def test_list_shows_transcripts_newest_first_without_writing(self):
+        self.run_cli('init', '--task', 'Shared | task', '--name', 'feature/shared')
+        self.run_cli('finish', '--name', 'feature/shared')
+        files = sorted(p.name for p in (self.root / 'logs' / 'repo').iterdir())
+        output = self.run_cli('list')
+        self.assertEqual(sorted(p.name for p in (self.root / 'logs' / 'repo').iterdir()), files)
+        self.assertIn('| Key | Status | Updated | Branches | Task |', output)
+        self.assertIn('`feature/shared` | done', output)
+        self.assertIn('Shared \\| task', output)
+        self.assertIn('`test` | in progress', output)
+        self.assertLess(output.index('feature/shared'), output.index('`test`'))
+        self.assertNotIn('digest', output.split('Task |', 1)[1])
+
+    def test_event_records_branch_and_detached(self):
+        self.append('On test')
+        self.assertIn('- Branch: `test`', self.log.read_text())
+        self.git('commit', '--allow-empty', '-m', 'c', '-q')
+        self.git('checkout', '--detach', '-q')
+        self.append('Detached', '--name', 'test')
+        events = m.parse_events(self.log.read_text())
+        self.assertEqual([e['branch'] for e in events], ['test', 'detached'])
+        self.assertIn('Branch: `detached`', self.run_cli('show', '--event', 'E002', '--name', 'test'))
+
+    def test_branch_with_backtick_does_not_break_parsing(self):
+        self.git('commit', '--allow-empty', '-m', 'c', '-q')
+        self.git('checkout', '-b', 'feat`x', '-q')
+        self.append('Odd branch', '--name', 'test')
+        self.assertEqual(m.parse_events(self.log.read_text())[0]['branch'], "feat'x")
+
+    def test_digest_marks_branch_changes_and_list_shows_branches(self):
+        self.append('First')
+        self.append('Second')
+        self.git('commit', '--allow-empty', '-m', 'c', '-q')
+        self.git('checkout', '-b', 'feature/next', '-q')
+        self.append('Third', '--name', 'test')
+        digest = self.log.with_name('test.digest.md').read_text()
+        self.assertEqual(digest.count('_branch: test_'), 1)
+        self.assertEqual(digest.count('_branch: feature/next_'), 1)
+        self.assertLess(digest.index('_branch: test_'), digest.index('First'))
+        self.assertLess(digest.index('Second'), digest.index('_branch: feature/next_'))
+        self.assertLess(digest.index('_branch: feature/next_'), digest.index('Third'))
+        self.assertIn('| test, feature/next |', self.run_cli('list'))
+
+    def test_list_without_transcripts_and_in_detached_head(self):
+        self.log.unlink()
+        self.log.with_name('test.digest.md').unlink()
+        self.assertIn('No transcripts', self.run_cli('list'))
+        self.run_cli('init', '--task', 'x', '--name', 'shared')
+        self.git('commit', '--allow-empty', '-m', 'c', '-q')
+        self.git('checkout', '--detach', '-q')
+        self.assertIn('`shared`', self.run_cli('list'))
+
+    def test_missing_transcript_hint_mentions_list(self):
+        result = subprocess.run([sys.executable, str(SCRIPT), 'resume', '--name', 'nope'], cwd=self.repo,
+                                env=self.env, text=True, capture_output=True)
+        self.assertIn('`list`', result.stderr)
+
+    def test_index_lists_keys(self):
+        self.run_cli('init', '--task', 'x', '--name', 'shared')
+        self.run_cli('index')
+        index = (self.root / 'logs' / 'repo' / 'INDEX.md').read_text()
+        self.assertIn('| Key |', index)
+        self.assertIn('`shared`', index)
+        self.assertIn('`test`', index)
 
     def test_branch_slash_becomes_double_underscore(self):
         self.git('checkout', '-b', 'feature/x', '-q')
