@@ -2,6 +2,7 @@
 
 import argparse
 import fcntl
+import itertools
 import json
 import os
 import re
@@ -332,34 +333,30 @@ def digest_summary_line(group: list[dict]) -> str:
     counts: dict[str, int] = {}
     for event in group:
         counts[event["type"]] = counts.get(event["type"], 0) + 1
-    types = [event_type for event_type in EVENT_TYPES if event_type in counts]
-    summary = ", ".join(f"{counts[event_type]} {event_type}" for event_type in types)
-    return (
-        f"- … {group[0]['id']}–{group[-1]['id']} (earlier, {len(group)} {'event' if len(group) == 1 else 'events'}): {summary} — "
-        f"`show --type {','.join(types)}` or `show --event <ID>`"
-    )
+    summary = ", ".join(f"{counts[event_type]} {event_type}" for event_type in EVENT_TYPES if event_type in counts)
+    return f"- … {group[0]['id']}–{group[-1]['id']} ({len(group)} {'event' if len(group) == 1 else 'events'}): {summary}"
 
 
 def digest_entries(listed: list[dict], replacements: dict[str, list[str]]) -> list[tuple[str, str]]:
-    """(branch, line) pairs in recorded order: older events folded per branch segment, recent ones in full."""
+    """(branch, line) pairs in recorded order.
+
+    The latest events get a line each. Older ones are folded into one line per branch segment;
+    events of DIGEST_ALWAYS_TYPES keep their own line and are placed by their position.
+    """
     older = listed[:-DIGEST_RECENT_EVENTS] if len(listed) > DIGEST_RECENT_EVENTS else []
-    entries: list[tuple[str, str]] = []
-    group: list[dict] = []
-
-    def flush() -> None:
-        if group:
-            entries.append((group[0]["branch"], digest_summary_line(group)))
-            group.clear()
-
-    for event in older:
-        if event["type"] in DIGEST_ALWAYS_TYPES:
-            flush()
-            entries.append((event["branch"], digest_event_line(event, replacements)))
-        else:
-            if group and group[0]["branch"] != event["branch"]:
-                flush()
-            group.append(event)
-    flush()
+    folded_entries: list[tuple[int, str, str]] = []
+    for branch, segment_events in itertools.groupby(older, key=lambda event: event["branch"]):
+        segment = list(segment_events)
+        folded = [event for event in segment if event["type"] not in DIGEST_ALWAYS_TYPES]
+        if folded:
+            folded_entries.append((int(folded[0]["id"][1:]), branch, digest_summary_line(folded)))
+        folded_entries.extend(
+            (int(event["id"][1:]), branch, digest_event_line(event, replacements))
+            for event in segment
+            if event["type"] in DIGEST_ALWAYS_TYPES
+        )
+    folded_entries.sort(key=lambda entry: entry[0])
+    entries = [(branch, line) for _, branch, line in folded_entries]
     entries.extend((event["branch"], digest_event_line(event, replacements)) for event in listed[len(older):])
     return entries
 
@@ -415,8 +412,9 @@ def build_digest(content: str, repository: str, key: str) -> str:
         "",
         "> Derived file, not the source of truth. One line per active event: "
         "`<ID> · <time> · <type> · <title>`; with more than "
-        f"{DIGEST_RECENT_EVENTS} events, older ones are folded into `… <first>–<last>` summary lines "
-        "(requests, user decisions, plans and blockers always stay). For details run `show --event <ID>`; "
+        f"{DIGEST_RECENT_EVENTS} events, older ones are folded into one `… <first>–<last> (<N> events): <counts by type>` "
+        "line per branch segment (requests, user decisions, plans and blockers keep their own line). "
+        "Open folded events with `show --type <type>` and any event with `show --event <ID>`; "
         "if it disagrees with or lacks enough detail, check the full transcript `"
         f"{safe_name(key)}.md`. Regenerate with the `digest` command.",
         "",

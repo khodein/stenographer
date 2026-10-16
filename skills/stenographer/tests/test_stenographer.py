@@ -126,27 +126,31 @@ class StenographerTest(BaseCase):
         digest = self.build_digest(specs)
         for line in ('- E001 · ', '- E010 · ', '- E020 · '):
             self.assertIn(line, digest)
-        self.assertIn('- … E002–E009 (earlier, 8 events): 8 decision', digest)
-        self.assertIn('- … E011–E019 (earlier, 9 events): 9 decision', digest)
-        self.assertIn('- … E021–E040 (earlier, 20 events): 20 decision', digest)
+        summary = '- … E002–E040 (37 events): 37 decision'
+        self.assertIn(summary, digest)
+        # Always-kept events keep their own line and are placed by their position.
+        self.assertLess(digest.index('- E001 · '), digest.index(summary))
+        self.assertLess(digest.index(summary), digest.index('- E010 · '))
+        self.assertLess(digest.index('- E010 · '), digest.index('- E020 · '))
+        self.assertLess(digest.index('- E020 · '), digest.index('- E041 · '))
         self.assertNotIn('- E040 · ', digest)
         self.assertIn('- E041 · ', digest)
         self.assertIn('- E120 · ', digest)
         lines = [line for line in digest.splitlines() if line.startswith('- E')]
         self.assertEqual(len(lines), 83)
-        self.assertEqual(digest.count('- … '), 3)
+        self.assertEqual(digest.count('- … '), 1)
 
     def test_digest_has_no_summary_up_to_the_limit_and_singular_after_it(self):
         digest = self.build_digest([('decision', 'main', [])] * 80)
         self.assertNotIn('- … ', digest)
         digest = self.build_digest([('decision', 'main', [])] * 81)
-        self.assertIn('- … E001–E001 (earlier, 1 event): 1 decision', digest)
+        self.assertIn('- … E001–E001 (1 event): 1 decision', digest)
 
     def test_digest_folds_per_branch_segment(self):
         specs = [('decision', 'a', [])] * 30 + [('code-change', 'b', [])] * 30 + [('decision', 'a', [])] * 60
         digest = self.build_digest(specs)
-        self.assertIn('- … E001–E030 (earlier, 30 events): 30 decision', digest)
-        self.assertIn('- … E031–E040 (earlier, 10 events): 10 code-change', digest)
+        self.assertIn('- … E001–E030 (30 events): 30 decision', digest)
+        self.assertIn('- … E031–E040 (10 events): 10 code-change', digest)
         self.assertLess(digest.index('_branch: a_'), digest.index('E001–E030'))
         self.assertLess(digest.index('E001–E030'), digest.index('_branch: b_'))
         self.assertLess(digest.index('_branch: b_'), digest.index('E031–E040'))
@@ -156,7 +160,14 @@ class StenographerTest(BaseCase):
         specs = [('decision', 'main', [])] * 100
         specs[4] = ('decision', 'main', ['E003'])
         digest = self.build_digest(specs)
-        self.assertIn('- … E001–E020 (earlier, 19 events): 19 decision', digest)
+        self.assertIn('- … E001–E020 (19 events): 19 decision', digest)
+
+    def test_digest_keeps_one_summary_per_branch_segment_however_many_always_events(self):
+        specs = []
+        for number in range(300):
+            specs.append(('plan' if number % 7 == 0 else 'decision', 'main', []))
+        digest = self.build_digest(specs)
+        self.assertEqual(digest.count('- … '), 1)
 
     def test_digest_size_is_bounded_for_long_transcripts(self):
         types = ['decision', 'code-change', 'verification', 'user-addition', 'external-action']

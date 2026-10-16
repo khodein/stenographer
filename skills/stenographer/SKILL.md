@@ -205,7 +205,7 @@ python3 ~/.local/share/skills/stenographer/scripts/stenographer.py append \
 
 Use `--body-file <path>` instead of `--body` for text with backticks/`$`/Markdown; `code-change` additionally requires `--file` and `--symbol`. Fully worked examples (`user-request`, `code-change` with a diff via `--body-file`, `verification`) are in `reference.md`.
 
-The digest (`<key>.digest.md`) is updated automatically by `init`, `append`, `resume`, and `finish`: status, task, affected files/symbols, and one line `<ID> · <MM-DD HH:MM> · <type> · <title>` per active event, with a `_branch: <name>_` line whenever the branch changes. Only the latest 80 listed events get their own line; older ones are folded into one `… E002–E140 (earlier, N events): <counts by type>` line per branch segment (user requests, user decisions, plans, and blockers always keep their own lines), so open those ranges with `show --type …` or `show --event <ID>`. To rebuild it manually, for example if it was deleted or looks stale:
+The digest (`<key>.digest.md`) is updated automatically by `init`, `append`, `resume`, and `finish`: status, task, affected files/symbols, and one line `<ID> · <MM-DD HH:MM> · <type> · <title>` per active event, with a `_branch: <name>_` line whenever the branch changes. Only the latest 80 listed events get their own line; older ones are folded into one `… E002–E140 (N events): <counts by type>` line per branch segment (user requests, user decisions, plans, and blockers keep their own lines), so open folded events with `show --type <type>` or `show --event <ID>`. To rebuild it manually, for example if it was deleted or looks stale:
 
 ```bash
 python3 ~/.local/share/skills/stenographer/scripts/stenographer.py digest
