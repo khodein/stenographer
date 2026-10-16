@@ -1,10 +1,10 @@
 # Stenographer
 
-`stenographer` is a skill for AI coding agents (Claude Code, Codex, and any other agent that can read a Markdown skill file) that maintains a chronological task transcript for each Git branch. It records verbatim user messages, visible AI responses, actions, tool calls, results, decisions, code changes, and verification events while excluding secrets and hidden model reasoning. It is off by default and records only while you've explicitly enabled it for the task.
+`stenographer` is a skill for AI coding agents (Claude Code, Codex, and any other agent that can read a Markdown skill file) that maintains a chronological transcript for each task. By default a task is identified by its Git branch; you can also name it explicitly and keep one transcript across several branches. It records verbatim user messages, visible AI responses, actions, tool calls, results, decisions, code changes, and verification events while excluding secrets and hidden model reasoning. It is off by default and records only while you've explicitly enabled it for the task.
 
 ## Why use it?
 
-AI-assisted development can span long sessions, multiple agents, and repeated context resets. Important details often end up scattered across chat history, terminal output, and uncommitted changes. Stenographer turns that activity into a durable, branch-specific record.
+AI-assisted development can span long sessions, multiple agents, and repeated context resets. Important details often end up scattered across chat history, terminal output, and uncommitted changes. Stenographer turns that activity into a durable, task-specific record.
 
 This helps you:
 
@@ -33,9 +33,10 @@ Every event gets a stable ID (`E001`, `E002`, …). A new decision can mark an o
 The skill stores transcripts outside the working repository at:
 
 ```text
-~/.config/ai-rules/stenographer/<repository>/<branch>.md
+~/.config/ai-rules/stenographer/<repository>/<key>.md
 ```
 
+The `<key>` is the current branch name unless you choose another name with `--name`. Every event records the branch it was written on, so a transcript can follow one task through several branches.
 ## Installation
 
 Clone the repository, then install the skill once to a shared location and link it into whichever agents you use — this keeps a single copy in sync everywhere, and keeps the `stenographer.py` path in `SKILL.md`/`reference.md` valid regardless of which agent reads them:
@@ -58,13 +59,14 @@ Restart your agent, or start a new task, after installation. If you only use one
 
 ## Usage
 
-Invoke the skill explicitly with `$stenographer` (Codex) or by name (Claude Code), or add a project instruction requiring it before work in Git repositories. It is off by default: the agent never asks in advance and records only after you enable it for the task. Run every command below from the Git repository whose branch should be transcribed.
+Invoke the skill explicitly with `$stenographer` (Codex) or by name (Claude Code), or add a project instruction requiring it before work in Git repositories. It is off by default: the agent never asks in advance and records only after you enable it for the task. Run every command below from the Git repository whose transcripts you want to use.
 
 ```bash
 python3 ~/.local/share/skills/stenographer/scripts/stenographer.py show
 python3 ~/.local/share/skills/stenographer/scripts/stenographer.py show --event E001
 python3 ~/.local/share/skills/stenographer/scripts/stenographer.py context
-python3 ~/.local/share/skills/stenographer/scripts/stenographer.py init --task "Task description"
+python3 ~/.local/share/skills/stenographer/scripts/stenographer.py list
+python3 ~/.local/share/skills/stenographer/scripts/stenographer.py init --task "Task description" --name my-task
 python3 ~/.local/share/skills/stenographer/scripts/stenographer.py append --type action --title "Action" --body "Details"
 python3 ~/.local/share/skills/stenographer/scripts/stenographer.py digest
 python3 ~/.local/share/skills/stenographer/scripts/stenographer.py index
@@ -73,7 +75,9 @@ python3 ~/.local/share/skills/stenographer/scripts/stenographer.py finish
 ```
 
 - `context` builds a read-only, deterministic extract of the transcript (goals, decisions, plans, open questions, recent checks) without touching the file — useful for resuming a task without re-reading the whole log.
-- `digest` regenerates a derived `<branch>.digest.md` summary; `index` regenerates a repository-wide `INDEX.md` listing every stored branch transcript with its status.
+- `list` prints the repository's transcripts (key, status, last update, branches, task) so you can pick one to continue. Pass `--name <key>` to every command to work with a transcript other than the one named after the current branch; `init` refuses a name already taken by a different task.
+- `<key>.digest.md` is a derived, token-cheap map of the transcript: one line per active event (`E012 · 10-16 10:58 · decision · title`), so an agent can scan it and open only the events it needs with `show --event`. It is updated automatically after every `init`, `append`, `resume`, and `finish`; `digest` rebuilds it manually.
+- `index` regenerates a repository-wide `INDEX.md` listing every stored transcript with its status.
 
 See `skills/stenographer/SKILL.md` for the full agent-facing rules (what to record, what to skip, content conventions) and `skills/stenographer/reference.md` for the `--supersedes`/ID semantics, `--symbol`/diff conventions for `code-change`, and fully worked `append` examples.
 

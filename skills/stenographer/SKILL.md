@@ -1,15 +1,15 @@
 ---
 name: stenographer
-description: "Maintains a complete real-time transcript for work on the current Git branch, recording verbatim user messages and visible AI responses, decisions, changes, checks, and external operations, without process noise or duplicates. Off by default: run only on the user's explicit request, and don't ask about it in advance."
+description: "Maintains a complete real-time transcript for the current task (stored under an explicit name, by default the current Git branch), recording verbatim user messages and visible AI responses, decisions, changes, checks, and external operations, without process noise or duplicates. Off by default: run only on the user's explicit request, and don't ask about it in advance."
 ---
 
 # Task Stenographer
 
 ## Purpose
 
-Maintain a chronological transcript of significant events for work on the current Git branch. Completeness means capturing requirements, decisions, changes, and evidence of results — not copying the raw tool-call stream. The transcript is a real-time event log, not an end-of-task summary.
+Maintain a chronological transcript of significant events for the current task. Completeness means capturing requirements, decisions, changes, and evidence of results — not copying the raw tool-call stream. The transcript is a real-time event log, not an end-of-task summary.
 
-Use `~/.local/share/skills/stenographer/scripts/stenographer.py`. Run it **from the working repository**, not from the skill directory: the script resolves the branch via `git rev-parse`/`git branch` relative to the current directory, so running it elsewhere produces the wrong Git context. Always use the full invocation:
+Use `~/.local/share/skills/stenographer/scripts/stenographer.py`. Run it **from the working repository**, not from the skill directory: the script resolves the repository (and, by default, the current branch) via `git` relative to the current directory, so running it elsewhere produces the wrong Git context. Always use the full invocation:
 
 ```bash
 python3 ~/.local/share/skills/stenographer/scripts/stenographer.py <command>
@@ -20,10 +20,10 @@ Do not rely on a shell alias: individual tool calls may run in isolated or non-i
 Store transcripts outside the repository:
 
 ```text
-~/.config/ai-rules/stenographer/<repository>/<branch>.md
+~/.config/ai-rules/stenographer/<repository>/<key>.md
 ```
 
-Keep the branch name in the file name; replace `/` with `__` so a branch never creates a nested directory. Override the storage root with the `STENOGRAPHER_ROOT` environment variable only when actually needed.
+The key is the transcript's name. By default it is the current branch name; `--name <key>` chooses another one (see "Choosing the transcript"). `/` in a key is replaced with `__` so a key never creates a nested directory. Override the storage root with the `STENOGRAPHER_ROOT` environment variable only when actually needed.
 
 Details of `--supersedes`/ID semantics for existing records, the exact `--symbol` naming rules and diff format for `code-change`, and fully worked `append` examples live in `~/.local/share/skills/stenographer/reference.md` next to this file. Read it when the matching situation comes up (superseding an older decision, the first `code-change`, unclear example syntax) — not necessarily at the start of every task.
 
@@ -32,33 +32,48 @@ Details of `--supersedes`/ID semantics for existing records, the exact `--symbol
 The stenographer is off by default. Don't ask about it before a task and don't run any stenographer command until the user explicitly enables it (by invoking the skill, "keep a transcript", etc.). No instruction means off.
 
 - The choice holds for the whole current task: follow-ups, new stages, resuming after a pause, or restoring context don't require enabling again. Carry the mode through task handoffs. For a genuinely new, independent task the mode is off again, unless the user set the mode for the whole session or some other explicit scope.
-- While off, don't read or modify the transcript, and don't run `show`, `context`, `init`, `resume`, `append`, `digest`, `index`, or `finish`. A direct request to work with an old transcript authorizes only that specific work, not recording the current task.
+- While off, don't read or modify the transcript, and don't run `show`, `context`, `list`, `init`, `resume`, `append`, `digest`, `index`, or `finish`. A direct request to work with an old transcript authorizes only that specific work, not recording the current task.
 - If the user changes their choice mid-task, apply it immediately. After disabling, don't run even the closing commands. After enabling, start recording from that point — don't reconstruct missed events from memory; note the user's request and mark where recording begins.
 
 The rest of this skill applies only while the stenographer is enabled. An existing transcript or an "in progress" status do not substitute for the user's choice.
+
+## Choosing the transcript
+
+A transcript belongs to a task, not to a branch: one task can span several branches, and every event records the branch it happened on (`Branch`, filled in automatically; `detached` outside a named branch). The transcript is identified by its key.
+
+- Default key: the current branch name. It is used only when no `--name` is given.
+- `list` prints the repository's transcripts (key, status, update date, branches, task). It is read-only and works in detached HEAD.
+- Once the key is chosen, pass `--name <key>` on **every** command (`init`, `append`, `show`, `context`, `digest`, `resume`, `finish`), even while you stay on the branch the key was taken from. Without `--name` the script falls back to the current branch and may write to the wrong transcript, or fail after the branch changes. All command examples in this skill omit `--name` for brevity: add it to each of them.
+- After a context reset, restore the key with `list` (match by task and branches; if unsure, ask the user) before running anything else.
+- A key must be a single line, must not start with `.`, contain `..` or a backslash, end with `.digest`, or be `INDEX`. Names that differ only by case are treated as the same name, so are `a/b` and `a__b`.
+- `init --name X` on an existing `X` succeeds only with the same task (idempotent); a different task is rejected so a new task never ends up in someone else's transcript. Don't work around the error: continue the existing transcript or pick another name.
 
 ## Startup after the user agrees
 
 Do this after the mode is chosen, before further research, planning, code changes, or external actions:
 
 1. Read this file completely.
-2. Determine the current branch and whether a transcript file exists at the path above, without printing the whole file. Run stenographer commands from the working repository.
-3. If a transcript exists:
-   a. run `python3 ~/.local/share/skills/stenographer/scripts/stenographer.py context` and read the output as your primary context;
-   b. use the IDs from the context to read the underlying source events via `show --event E001`; for a plan with deltas, read the base plan and every delta that applies to it. The context output is a trimmed excerpt, not a substitute for the full text of requirements;
-   c. for older records with no supersede links, don't assume the decision still holds automatically: cross-check the user's latest input and the current code, reading `show --type user-request,user-addition,user-decision,decision,plan` or the whole transcript if needed;
-   d. run `python3 ~/.local/share/skills/stenographer/scripts/stenographer.py resume` to set the status back to "in progress".
-4. If no transcript exists, run `python3 ~/.local/share/skills/stenographer/scripts/stenographer.py init --task "<short task title>"`.
+2. Run `python3 ~/.local/share/skills/stenographer/scripts/stenographer.py list` from the working repository to see the existing transcripts, without printing any transcript. Then pick the key:
+   a. the user named a transcript or the task clearly continues one from the list → use that key;
+   b. otherwise, if a transcript whose key equals the current branch name exists → continue it by default;
+   c. otherwise, including detached HEAD, don't guess: tell the user that no transcript was found for the current branch, mention that the list can be used to continue an existing one, and ask whether to create a new one and under which name (suggest the branch name, or a short task name when the branch doesn't describe the task). Wait for the answer.
+3. If the chosen transcript exists:
+   a. read the digest `~/.config/ai-rules/stenographer/<repository>/<key>.digest.md` first: a one-line-per-event map of the active events with their IDs. If it is missing, run `python3 ~/.local/share/skills/stenographer/scripts/stenographer.py digest`;
+   b. run `python3 ~/.local/share/skills/stenographer/scripts/stenographer.py context` and read the output as your primary context;
+   c. use the IDs from the digest and the context to read the underlying source events via `show --event E001`; for a plan with deltas, read the base plan and every delta that applies to it. The digest line and the context output are a pointer and a trimmed excerpt, not a substitute for the full text of requirements;
+   d. for older records with no supersede links, don't assume the decision still holds automatically: cross-check the user's latest input and the current code, reading `show --type user-request,user-addition,user-decision,decision,plan` or the whole transcript if needed;
+   e. run `python3 ~/.local/share/skills/stenographer/scripts/stenographer.py resume` to set the status back to "in progress".
+4. If it doesn't exist, run `python3 ~/.local/share/skills/stenographer/scripts/stenographer.py init --task "<short task title>" --name <key>`.
 5. Record the current user message as a `user-request` event for a new transcript, or `user-addition` with `--actor user` when continuing an existing one.
 6. Only then move on to the rest of the work.
 
-Reading this `SKILL.md`, the first `show`/`context` call, and `init` when needed are bootstrap actions; the results are not recorded after the fact, because reliable recording isn't possible before the transcript is found or created. Everything after that is recorded in real time, in order.
+Reading this `SKILL.md`, `list`, the first `show`/`context` call, and `init` when needed are bootstrap actions; the results are not recorded after the fact, because reliable recording isn't possible before the transcript is found or created. Everything after that is recorded in real time, in order.
 
-The digest is a derived artifact, not the source of truth. It's built by deterministic parsing of already-recorded events (no LLM summarization) and can be regenerated at any time with `digest` without any risk of losing data — the full transcript is never changed by it. When in doubt or in case of a mismatch, trust the full transcript over the digest.
+The digest is a derived artifact, not the source of truth. It's built by deterministic parsing of already-recorded events (no LLM summarization) and is regenerated automatically after every `init`, `append`, `resume`, and `finish`; `digest` rebuilds it manually without any risk of losing data — the full transcript is never changed by it. When in doubt or in case of a mismatch, trust the full transcript over the digest. Never run `digest` as a routine step.
 
 When creating a transcript, pass a short task title to `init --task`; save the full original request once, in a `user-request` event.
 
-If the Git branch cannot be resolved, stop transcription, tell the user, and don't create a file under a made-up name.
+If the repository can't be resolved, or there is neither a named branch nor an agreed `--name`, stop transcription, tell the user, and don't create a file under a made-up name.
 
 ## Selecting events: meaning first, then type
 
@@ -107,9 +122,9 @@ Don't treat errors, blockers, and disproved hypotheses as noise if they change a
 
 - Record every user message, response, and comment verbatim and in full, regardless of length.
 - Record substantive AI comments and responses that pass the selection rules above verbatim and in full. Skip process announcements and empty acknowledgements.
-- Put the verbatim text of a message, response, or comment in `--body`; use `--title` only as a short event label, never as a substitute for the text.
+- Put the verbatim text of a message, response, or comment in `--body`; use `--title` only as a short event label, never as a substitute for the text. The title is also the event's line in the digest, which a later reader scans to decide which events to open, so make it self-contained: one line, the specific decision, change, or finding and its key reason ("Cache in Room, migrate from DataStore"), not a generic label ("Decision", "Update"). Titles longer than 120 characters are cut in the digest.
 - If the body contains Markdown backticks (inline code, a fenced diff block), `$`, or other shell-active characters, don't pass that text inline via `--body` on the command line. Write it to a file (with your editing tool, not through the shell, with no escaping) and pass the path via `--body-file`. This avoids the shell reinterpreting the content as a command — a repeatedly observed failure mode with inline `--body` containing backticks. `--body` and `--body-file` are mutually exclusive; passing both is rejected.
-- Set `--actor`: `user` for user events (`user-request`, `user-addition`, `user-decision`), `system` for system events, and for AI actions, comments, and responses, the actual model name (e.g. `Claude Opus 4.8` or `Codex GPT-5`) — never leave the generic `agent`. Each agent fills in its own name. You can set a default once via the `STENOGRAPHER_ACTOR` environment variable, but when multiple agents work the same branch, still set the name explicitly on every event.
+- Set `--actor`: `user` for user events (`user-request`, `user-addition`, `user-decision`), `system` for system events, and for AI actions, comments, and responses, the actual model name (e.g. `Claude Opus 4.8` or `Codex GPT-5`) — never leave the generic `agent`. Each agent fills in its own name. You can set a default once via the `STENOGRAPHER_ACTOR` environment variable, but when multiple agents work the same transcript, still set the name explicitly on every event.
 - For a tool call, record the tool name, the full operation or command, parameters with secrets removed, and the purpose of the call.
 - For a tool result, keep the status and the minimal excerpt that supports the outcome; for a successful check, the command and result; for an error, the material diagnostics. Don't call an excerpt the full output. Mask secrets and confidential data with `[REDACTED]` **before** calling `append`, while still recording the event — the script fully rejects a record if it detects a secret rather than editing it, so masking is the agent's responsibility; the built-in check only catches a limited set of patterns and doesn't replace manual redaction.
 - Label excerpts from long output as a "material excerpt"; state the number of omitted lines only if actually counted. Keep everything needed to understand an error or a result, without an arbitrary limit that cuts off evidence.
@@ -129,6 +144,8 @@ Add these to a significant event's own record when useful, instead of creating a
 | --- | --- |
 | `--context-section` | `goal` — a goal; `requirement` — a requirement/constraint; `result` — an achieved result; `question` — an open question; `next-step` — an explicit next step |
 | `--evidence-status` | `confirmed` — confirmed, state the basis in the body; `hypothesis` — a hypothesis; `proposed` — a proposal not yet accepted |
+
+The branch is not a parameter: every event gets `Branch` automatically from the current Git state.
 
 Don't pass off the user's agreement as a technical check: state exactly what was confirmed and how. Without this metadata the tool shows "not set"/"unknown" rather than inferring a status from words like "done" or from the event type.
 
@@ -164,7 +181,7 @@ python3 ~/.local/share/skills/stenographer/scripts/stenographer.py context
 python3 ~/.local/share/skills/stenographer/scripts/stenographer.py show --event E042
 ```
 
-Show the current branch transcript, in full or filtered by type:
+Show the transcript, in full or filtered by type:
 
 ```bash
 python3 ~/.local/share/skills/stenographer/scripts/stenographer.py show
@@ -187,13 +204,19 @@ python3 ~/.local/share/skills/stenographer/scripts/stenographer.py append \
 
 Use `--body-file <path>` instead of `--body` for text with backticks/`$`/Markdown; `code-change` additionally requires `--file` and `--symbol`. Fully worked examples (`user-request`, `code-change` with a diff via `--body-file`, `verification`) are in `reference.md`.
 
-Regenerate the current branch's digest (`<branch>.digest.md`): status, task, per-type counts, decisions with no explicit supersede, blockers, affected files/symbols, and plans with their deltas:
+The digest (`<key>.digest.md`) is updated automatically by `init`, `append`, `resume`, and `finish`: status, task, affected files/symbols, and one line `<ID> · <MM-DD HH:MM> · <type> · <title>` per active event, with a `_branch: <name>_` line whenever the branch changes. To rebuild it manually, for example if it was deleted or looks stale:
 
 ```bash
 python3 ~/.local/share/skills/stenographer/scripts/stenographer.py digest
 ```
 
-Regenerate the repository's branch index (`INDEX.md` in the repository's transcript directory) — a branch/status/date/task table across every stored transcript:
+List the repository's transcripts (read-only; key, status, update date, branches, task, newest first):
+
+```bash
+python3 ~/.local/share/skills/stenographer/scripts/stenographer.py list
+```
+
+Regenerate the repository's index (`INDEX.md` in the repository's transcript directory) — a key/status/date/task table across every stored transcript:
 
 ```bash
 python3 ~/.local/share/skills/stenographer/scripts/stenographer.py index
@@ -205,7 +228,7 @@ Resume work on an existing transcript after reading it fully:
 python3 ~/.local/share/skills/stenographer/scripts/stenographer.py resume
 ```
 
-Mark a branch as finished (default status `done`):
+Mark a transcript as finished (default status `done`):
 
 ```bash
 python3 ~/.local/share/skills/stenographer/scripts/stenographer.py finish --status "done"
@@ -219,5 +242,4 @@ Before the final response, while the stenographer is enabled:
 2. If a final plan was produced, make sure its full content was published in the transcript as a separate `plan` event.
 3. Record the substantive final response verbatim as an `agent-response` event; skip a pure acknowledgement with no new information. Don't create an additional summary. Add the `--with-usage` flag: the script appends the sum of AI response tokens for the turn (input, cache read/write, output) from the Claude Code session transcript. Use it only for `agent-response` and `agent-comment`; if the transcript isn't found, record the event without the flag.
 4. Don't treat the transcript as a substitute for the response to the user: the final response must stand on its own.
-5. Run `digest` so the next pass at this task (in this session or another) starts from an up-to-date digest instead of a stale one.
-6. When work on the branch is done (merged/closed), run `python3 ~/.local/share/skills/stenographer/scripts/stenographer.py finish` to move the status from "in progress" to "done", then `digest` so the digest reflects the final status.
+5. When the task is done (merged/closed), run `python3 ~/.local/share/skills/stenographer/scripts/stenographer.py finish` to move the status from "in progress" to "done"; the digest is updated by the command itself.

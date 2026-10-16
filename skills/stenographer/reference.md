@@ -4,7 +4,7 @@ Don't read this in full at the start of every task — only the relevant section
 
 ## Identifiers, supersedes, and context extraction
 
-`append` assigns an ID (`E001`, `E002`, …) under a file lock and returns it in the result. IDs are unique within a branch's transcript. Older events with no ID get a stable positional number when read, without rewriting history — so events can never be reordered or deleted. Use the ID you were given or that you read; never guess one.
+`append` assigns an ID (`E001`, `E002`, …) under a file lock and returns it in the result. IDs are unique within a transcript. Older events with no ID get a stable positional number when read, without rewriting history — so events can never be reordered or deleted. Use the ID you were given or that you read; never guess one.
 
 When a new decision fully replaces an older one, add `--supersedes E042` to the regular event. Repeat the flag for multiple supersedes. You can only reference events that already exist in this transcript; an invalid reference is rejected before the write. The new record hides the superseded one from `context`/`digest`, but the original event is preserved and still available via `show --event E042`.
 
@@ -15,6 +15,8 @@ When a new decision fully replaces an older one, add `--supersedes E042` to the 
 - Use `--supersedes` only for an established replacement, not because two records sound similar. Don't supersede an agreed decision with an unconfirmed proposal.
 
 `context` is read-only: it builds its output from the current file without an LLM, without touching the digest or the transcript. It surfaces goals, decisions, plans and deltas, results, questions, hypotheses, next steps, the last five checks/errors and user messages, files/symbols, and supersede links. Bodies longer than 800 characters are truncated with an explicit marker — this is navigation to the source, not a replacement for reading it. Full event text: `show --event <ID>`.
+
+The digest (`<key>.digest.md`) is the cheapest entry point: it is regenerated automatically after `init`, `append`, `resume`, and `finish`, and a failure to write it never fails the command (a warning goes to stderr; `resume` or `digest` repairs it). After the header, task, and affected files/symbols it lists one line per active event, in recorded order: `E012 · 10-16 10:58 · decision · <title> (supersedes E007)`. Only these are listed: `user-request`, `user-addition`, `user-decision`, `plan`, `decision`, `code-change`, `blocker`, `commit`, `push`, `external-action`, any event with `--context-section question` or `next-step`, and the five most recent `verification`/`error` events. Superseded events are omitted; titles are cut at 120 characters. Whenever the branch of the listed events changes, a `_branch: <name>_` line precedes the first event on it (the first listed event always gets one). Bodies are never included — open an event with `show --event <ID>`.
 
 Don't auto-tag or guess supersede links for older records. A record with no explicit supersede is not proof that it's still current. Before making changes, check the current files — the user may have changed them since the last recorded event. If you establish that a record is stale, record a new observation and its basis.
 
@@ -28,6 +30,23 @@ python3 ~/.local/share/skills/stenographer/scripts/stenographer.py append \
 ```
 
 The body should contain the decision itself and the basis for confirming it (e.g. a choice the user agreed to). The flag itself is not an automatic check.
+
+## Transcript keys and branches
+
+- The key is the transcript's name and its file name (`<key>.md`, `<key>.digest.md`). Without `--name` it is the current branch; `--name` is accepted by `init`, `append`, `show`, `context`, `digest`, `resume`, and `finish`, and must be repeated on each call. `list` and `index` need no key.
+- Allowed: any single-line name. Rejected: empty, starting with `.`, containing `..` or `\`, ending with `.digest`, equal to `INDEX` (any case). `/` is stored as `__` in the file name; the header keeps the original key.
+- Uniqueness is checked by `init`: `init --name X --task T` on an existing `X` is a no-op only if `T` equals the stored task (surrounding whitespace ignored); otherwise it fails and the file stays untouched. It also fails when another transcript maps to the same file (`a/b` vs `a__b`) or differs only by case (`Shared` vs `shared`), on every filesystem.
+- Without `--name`, a missing transcript is an error that points to `list` and `init`; in detached HEAD, a key must be given explicitly.
+- Every new event stores `- Branch: \`<name>\``: the branch at the time of `append`, or `detached`. `list` shows the branches seen in a transcript, in order of first appearance; the digest marks branch changes.
+
+Example: continuing one task on a second branch:
+
+```bash
+python3 ~/.local/share/skills/stenographer/scripts/stenographer.py list
+python3 ~/.local/share/skills/stenographer/scripts/stenographer.py resume --name checkout-redesign
+python3 ~/.local/share/skills/stenographer/scripts/stenographer.py append --name checkout-redesign \
+  --type user-addition --actor user --title "Follow-up on the new branch" --body "<verbatim user message>"
+```
 
 ## --symbol naming and code-change diff format
 
