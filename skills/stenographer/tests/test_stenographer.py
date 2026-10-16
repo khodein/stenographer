@@ -1,3 +1,4 @@
+import argparse
 import importlib.util
 import json
 import os
@@ -104,6 +105,66 @@ class StenographerTest(BaseCase):
         self.assertNotIn('Noisy call', digest)
         self.assertIn('L' * 119 + '…', digest)
         self.assertNotIn('L' * 120, digest)
+
+    def build_digest(self, specs):
+        """specs: (type, branch, supersedes) per event; returns the digest of an in-memory transcript."""
+        content = m.header(self.repo, 'repo', 'big', 'Big task')
+        for number, (event_type, branch, supersedes) in enumerate(specs, 1):
+            args = argparse.Namespace(
+                title=f'{event_type} {number}', type=event_type, actor='a', event_id=f'E{number:03d}',
+                branch=branch, supersedes=supersedes, context_section=None, evidence_status=None,
+                body='x', file=['f.kt'] if event_type == 'code-change' else None,
+                symbol=['f.F'] if event_type == 'code-change' else None, command=None, result=None)
+            content += '\n\n' + m.event_entry(args)
+        return m.build_digest(content, 'repo', 'big')
+
+    def test_digest_folds_older_events_but_keeps_always_types(self):
+        specs = [('decision', 'main', [])] * 120
+        specs[0] = ('user-request', 'main', [])
+        specs[9] = ('plan', 'main', [])
+        specs[19] = ('blocker', 'main', [])
+        digest = self.build_digest(specs)
+        for line in ('- E001 · ', '- E010 · ', '- E020 · '):
+            self.assertIn(line, digest)
+        self.assertIn('- … E002–E009 (earlier, 8 events): 8 decision', digest)
+        self.assertIn('- … E011–E019 (earlier, 9 events): 9 decision', digest)
+        self.assertIn('- … E021–E040 (earlier, 20 events): 20 decision', digest)
+        self.assertNotIn('- E040 · ', digest)
+        self.assertIn('- E041 · ', digest)
+        self.assertIn('- E120 · ', digest)
+        lines = [line for line in digest.splitlines() if line.startswith('- E')]
+        self.assertEqual(len(lines), 83)
+        self.assertEqual(digest.count('- … '), 3)
+
+    def test_digest_has_no_summary_up_to_the_limit_and_singular_after_it(self):
+        digest = self.build_digest([('decision', 'main', [])] * 80)
+        self.assertNotIn('- … ', digest)
+        digest = self.build_digest([('decision', 'main', [])] * 81)
+        self.assertIn('- … E001–E001 (earlier, 1 event): 1 decision', digest)
+
+    def test_digest_folds_per_branch_segment(self):
+        specs = [('decision', 'a', [])] * 30 + [('code-change', 'b', [])] * 30 + [('decision', 'a', [])] * 60
+        digest = self.build_digest(specs)
+        self.assertIn('- … E001–E030 (earlier, 30 events): 30 decision', digest)
+        self.assertIn('- … E031–E040 (earlier, 10 events): 10 code-change', digest)
+        self.assertLess(digest.index('_branch: a_'), digest.index('E001–E030'))
+        self.assertLess(digest.index('E001–E030'), digest.index('_branch: b_'))
+        self.assertLess(digest.index('_branch: b_'), digest.index('E031–E040'))
+        self.assertLess(digest.index('E031–E040'), digest.index('_branch: a_', digest.index('E031–E040')))
+
+    def test_folded_summary_skips_superseded_events(self):
+        specs = [('decision', 'main', [])] * 100
+        specs[4] = ('decision', 'main', ['E003'])
+        digest = self.build_digest(specs)
+        self.assertIn('- … E001–E020 (earlier, 19 events): 19 decision', digest)
+
+    def test_digest_size_is_bounded_for_long_transcripts(self):
+        types = ['decision', 'code-change', 'verification', 'user-addition', 'external-action']
+        specs = [(types[i % 5], f'branch-{i // 100}', []) for i in range(1500)]
+        specs[0] = ('user-request', 'branch-0', [])
+        digest = self.build_digest(specs)
+        self.assertLess(len(digest), 16000)
+        self.assertIn('- E1500 · ', digest)
 
     def test_digest_limits_recent_checks(self):
         for n in range(7):

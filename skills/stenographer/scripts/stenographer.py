@@ -51,6 +51,10 @@ DIGEST_SECTIONS = ("question", "next-step")
 DIGEST_RECENT_TYPES = ("verification", "error")
 DIGEST_RECENT_LIMIT = 5
 DIGEST_TITLE_LIMIT = 120
+# Only the latest events are listed one by one; older ones are folded into one line per branch
+# segment, except the types that are always needed to restore the context.
+DIGEST_RECENT_EVENTS = 80
+DIGEST_ALWAYS_TYPES = ("user-request", "user-decision", "plan", "blocker")
 
 # Transcript key chosen with --name; None means "use the current branch".
 TRANSCRIPT_KEY: Optional[str] = None
@@ -316,6 +320,50 @@ def short_time(value: str) -> str:
     return f"{match[1]} {match[2]}" if match else value
 
 
+def digest_event_line(event: dict, replacements: dict[str, list[str]]) -> str:
+    note = f" (supersedes {', '.join(replacements[event['id']])})" if event["id"] in replacements else ""
+    return (
+        f"- {event['id']} · {short_time(event['timestamp'])} · {event['type']} · "
+        f"{shorten_title(event['title'])}{note}"
+    )
+
+
+def digest_summary_line(group: list[dict]) -> str:
+    counts: dict[str, int] = {}
+    for event in group:
+        counts[event["type"]] = counts.get(event["type"], 0) + 1
+    types = [event_type for event_type in EVENT_TYPES if event_type in counts]
+    summary = ", ".join(f"{counts[event_type]} {event_type}" for event_type in types)
+    return (
+        f"- … {group[0]['id']}–{group[-1]['id']} (earlier, {len(group)} {'event' if len(group) == 1 else 'events'}): {summary} — "
+        f"`show --type {','.join(types)}` or `show --event <ID>`"
+    )
+
+
+def digest_entries(listed: list[dict], replacements: dict[str, list[str]]) -> list[tuple[str, str]]:
+    """(branch, line) pairs in recorded order: older events folded per branch segment, recent ones in full."""
+    older = listed[:-DIGEST_RECENT_EVENTS] if len(listed) > DIGEST_RECENT_EVENTS else []
+    entries: list[tuple[str, str]] = []
+    group: list[dict] = []
+
+    def flush() -> None:
+        if group:
+            entries.append((group[0]["branch"], digest_summary_line(group)))
+            group.clear()
+
+    for event in older:
+        if event["type"] in DIGEST_ALWAYS_TYPES:
+            flush()
+            entries.append((event["branch"], digest_event_line(event, replacements)))
+        else:
+            if group and group[0]["branch"] != event["branch"]:
+                flush()
+            group.append(event)
+    flush()
+    entries.extend((event["branch"], digest_event_line(event, replacements)) for event in listed[len(older):])
+    return entries
+
+
 def digest_path_for(path: Path) -> Path:
     return path.with_name(f"{path.stem}.digest.md")
 
@@ -366,7 +414,9 @@ def build_digest(content: str, repository: str, key: str) -> str:
         f"- Total events: `{len(events)}`",
         "",
         "> Derived file, not the source of truth. One line per active event: "
-        "`<ID> · <time> · <type> · <title>`. For details run `show --event <ID>`; "
+        "`<ID> · <time> · <type> · <title>`; with more than "
+        f"{DIGEST_RECENT_EVENTS} events, older ones are folded into `… <first>–<last>` summary lines "
+        "(requests, user decisions, plans and blockers always stay). For details run `show --event <ID>`; "
         "if it disagrees with or lacks enough detail, check the full transcript `"
         f"{safe_name(key)}.md`. Regenerate with the `digest` command.",
         "",
@@ -389,15 +439,11 @@ def build_digest(content: str, repository: str, key: str) -> str:
     lines.extend(["", "## Events", ""])
     if listed:
         shown_branch = ""
-        for event in listed:
-            if event["branch"] and event["branch"] != shown_branch:
-                shown_branch = event["branch"]
+        for branch, line in digest_entries(listed, replacements):
+            if branch and branch != shown_branch:
+                shown_branch = branch
                 lines.append(f"_branch: {shown_branch}_")
-            note = f" (supersedes {', '.join(replacements[event['id']])})" if event["id"] in replacements else ""
-            lines.append(
-                f"- {event['id']} · {short_time(event['timestamp'])} · {event['type']} · "
-                f"{shorten_title(event['title'])}{note}"
-            )
+            lines.append(line)
     else:
         lines.append("_none_")
 
