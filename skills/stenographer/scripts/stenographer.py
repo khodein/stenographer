@@ -230,7 +230,17 @@ def parse_events(content: str) -> list[dict]:
         elif marker:
             fence = marker[1]
         offset += len(line)
-    matches = [match for match in EVENT_HEADER_RE.finditer(content) if match.start() not in fenced_offsets]
+    # An unbalanced fence inside an event body (for example a diff hunk that shows only the opening
+    # fence) must not hide the events after it: a fenced header still counts when it carries the ID
+    # that follows the previous event, which only this script writes.
+    matches = []
+    last_number = 0
+    for match in EVENT_HEADER_RE.finditer(content):
+        id_match = re.match(r"\n- ID: `E(\d{3,})`", content[match.end():match.end() + 40])
+        if match.start() in fenced_offsets and not (id_match and int(id_match[1]) == last_number + 1):
+            continue
+        matches.append(match)
+        last_number = int(id_match[1]) if id_match else len(matches)
     events = []
     for index, match in enumerate(matches):
         end = matches[index + 1].start() if index + 1 < len(matches) else len(content)

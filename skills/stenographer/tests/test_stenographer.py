@@ -132,6 +132,24 @@ class StenographerTest(BaseCase):
         self.assertEqual(len(m.parse_events(self.log.read_text())), 2)
         self.assertIn(body, self.run_cli('show', '--event', 'E001'))
 
+    def test_unbalanced_fence_in_body_does_not_hide_later_events(self):
+        # A diff hunk can show an opening fence without its closing line.
+        body = 'Change:\n\n@@ -1,3 +1,3 @@\n \n-Old\n+New\n \n ```text\n <path>'
+        self.run_cli('append', '--type', 'research', '--title', 'Unbalanced fence', '--body', body)
+        self.append('After the fence')
+        self.append('And another one')
+        events = m.parse_events(self.log.read_text())
+        self.assertEqual([e['id'] for e in events], ['E001', 'E002', 'E003'])
+        self.assertIn('After the fence', self.run_cli('context'))
+        self.assertIn('E003', self.log.with_name('test.digest.md').read_text())
+
+    def test_fenced_copy_of_an_old_event_is_not_an_event(self):
+        self.append('First decision')
+        copy = 'Pasted:\n```markdown\n### 2026-09-01T12:00:00+04:00 — First decision\n- Type: `decision`\n- Author: `agent`\n- ID: `E001`\n\nText\n```'
+        self.run_cli('append', '--type', 'research', '--title', 'Pasted event', '--body', copy)
+        self.append('Next decision')
+        self.assertEqual([e['id'] for e in m.parse_events(self.log.read_text())], ['E001', 'E002', 'E003'])
+
     def test_context_sections_and_multiple_replacements(self):
         self.append('Old question', '--context-section', 'question')
         self.append('Old next step', '--context-section', 'next-step')
