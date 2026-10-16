@@ -88,6 +88,22 @@ def current_branch() -> str:
     return run_git("branch", "--show-current").replace("`", "'") or "detached"
 
 
+def transcripts_root(script: Path = Path(__file__)) -> Path:
+    """STENOGRAPHER_ROOT, else `transcripts/` in the repository this skill is checked out from.
+
+    When the skill was copied instead of linked, there is no repository above it:
+    fall back to `transcripts/` inside the skill directory.
+    """
+    override = os.environ.get("STENOGRAPHER_ROOT")
+    if override:
+        return Path(override).expanduser()
+    skill_dir = script.resolve().parents[1]
+    checkout = skill_dir.parents[1]
+    if skill_dir.parent.name == "skills" and (checkout / ".git").exists():
+        return checkout / "transcripts"
+    return skill_dir / "transcripts"
+
+
 def safe_name(value: str) -> str:
     return value.replace("/", "__")
 
@@ -116,13 +132,7 @@ def transcript_path() -> tuple[Path, Path, str, str]:
     else:
         repository_root = Path(run_git("rev-parse", "--show-toplevel")).resolve()
         repository, key = repository_root.name, validate_key(TRANSCRIPT_KEY)
-    transcript_root = Path(
-        os.environ.get(
-            "STENOGRAPHER_ROOT",
-            Path.home() / ".config" / "ai-rules" / "stenographer",
-        )
-    ).expanduser()
-    path = transcript_root / safe_name(repository) / f"{safe_name(key)}.md"
+    path = transcripts_root() / safe_name(repository) / f"{safe_name(key)}.md"
     return path, repository_root, repository, key
 
 
@@ -543,13 +553,7 @@ def command_digest() -> int:
 
 def repository_transcripts_dir() -> tuple[str, Path]:
     repository = Path(run_git("rev-parse", "--show-toplevel")).resolve().name
-    transcript_root = Path(
-        os.environ.get(
-            "STENOGRAPHER_ROOT",
-            Path.home() / ".config" / "ai-rules" / "stenographer",
-        )
-    ).expanduser()
-    return repository, transcript_root / safe_name(repository)
+    return repository, transcripts_root() / safe_name(repository)
 
 
 def command_list() -> int:
@@ -576,7 +580,7 @@ def command_list() -> int:
     if not entries:
         print(f"No transcripts for repository {repository}. Create one with `init --task \"...\" [--name <key>]`")
         return 0
-    print(f"Transcripts of repository {repository} (newest first). Continue one by passing --name <key> to every command:")
+    print(f"Transcripts of repository {repository} in {repo_dir} (newest first). Continue one by passing --name <key> to every command:")
     print()
     print("| Key | Status | Updated | Branches | Task |")
     print("| --- | --- | --- | --- | --- |")

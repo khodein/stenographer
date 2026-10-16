@@ -429,6 +429,33 @@ class CommandsTest(BaseCase):
                                 env=self.env, text=True, capture_output=True)
         self.assertIn('`list`', result.stderr)
 
+    def test_default_root_is_transcripts_in_the_checkout(self):
+        os.environ.pop('STENOGRAPHER_ROOT', None)
+        self.assertEqual(m.transcripts_root(), SCRIPT.resolve().parents[3] / 'transcripts')
+        self.assertTrue((SCRIPT.resolve().parents[3] / '.git').exists())
+
+    def test_env_overrides_root(self):
+        os.environ['STENOGRAPHER_ROOT'] = '~/somewhere'
+        self.addCleanup(os.environ.pop, 'STENOGRAPHER_ROOT')
+        self.assertEqual(m.transcripts_root(), Path('~/somewhere').expanduser())
+
+    def test_copied_skill_stores_transcripts_inside_the_skill_directory(self):
+        os.environ.pop('STENOGRAPHER_ROOT', None)
+        copy = self.root / 'share' / 'skills' / 'stenographer' / 'scripts' / 'stenographer.py'
+        copy.parent.mkdir(parents=True)
+        shutil.copy(SCRIPT, copy)
+        self.assertEqual(m.transcripts_root(copy), copy.resolve().parents[1] / 'transcripts')
+
+    def test_symlinked_skill_resolves_to_the_checkout(self):
+        os.environ.pop('STENOGRAPHER_ROOT', None)
+        link = self.root / 'linked'
+        link.symlink_to(SCRIPT.resolve().parents[1])
+        self.assertEqual(m.transcripts_root(link / 'scripts' / 'stenographer.py'),
+                         SCRIPT.resolve().parents[3] / 'transcripts')
+
+    def test_list_prints_the_transcript_directory(self):
+        self.assertIn(str(self.root / 'logs' / 'repo'), self.run_cli('list'))
+
     def test_index_lists_keys(self):
         self.run_cli('init', '--task', 'x', '--name', 'shared')
         self.run_cli('index')

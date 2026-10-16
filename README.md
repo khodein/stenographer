@@ -33,18 +33,21 @@ Every event gets a stable ID (`E001`, `E002`, …). A new decision can mark an o
 The skill stores transcripts outside the working repository at:
 
 ```text
-~/.config/ai-rules/stenographer/<repository>/<key>.md
+<stenographer repository>/transcripts/<repository>/<key>.md
 ```
 
+The `transcripts/` folder is created inside the repository the skill is installed from and is listed in `.gitignore`: transcripts hold verbatim messages and diffs, so they stay local. Set `STENOGRAPHER_ROOT` to store them elsewhere. This needs the skill to be *linked* to the checkout (see Installation); if you copy it instead, transcripts are stored in a `transcripts/` folder next to `scripts/` inside the copy.
+
 The `<key>` is the current branch name unless you choose another name with `--name`. Every event records the branch it was written on, so a transcript can follow one task through several branches.
+
 ## Installation
 
-Clone the repository, then install the skill once to a shared location and link it into whichever agents you use — this keeps a single copy in sync everywhere, and keeps the `stenographer.py` path in `SKILL.md`/`reference.md` valid regardless of which agent reads them:
+Clone the repository, then link the skill once into a shared location and from there into whichever agents you use — this keeps a single copy in sync everywhere, keeps the `stenographer.py` path in `SKILL.md`/`reference.md` valid regardless of which agent reads them, and lets the script find the repository where transcripts are stored:
 
 ```bash
 git clone https://github.com/khodein/stenographer.git
 mkdir -p ~/.local/share/skills
-cp -R stenographer/skills/stenographer ~/.local/share/skills/
+ln -s "$PWD/stenographer/skills/stenographer" ~/.local/share/skills/stenographer
 
 # Claude Code
 mkdir -p ~/.claude/skills

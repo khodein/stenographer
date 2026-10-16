@@ -20,10 +20,10 @@ Do not rely on a shell alias: individual tool calls may run in isolated or non-i
 Store transcripts outside the repository:
 
 ```text
-~/.config/ai-rules/stenographer/<repository>/<key>.md
+<skill repository>/transcripts/<repository>/<key>.md
 ```
 
-The key is the transcript's name. By default it is the current branch name; `--name <key>` chooses another one (see "Choosing the transcript"). `/` in a key is replaced with `__` so a key never creates a nested directory. Override the storage root with the `STENOGRAPHER_ROOT` environment variable only when actually needed.
+The key is the transcript's name. By default it is the current branch name; `--name <key>` chooses another one (see "Choosing the transcript"). `/` in a key is replaced with `__` so a key never creates a nested directory. The `transcripts/` folder lives in the stenographer repository the skill is installed from (git-ignored; if the skill was copied rather than linked, it sits inside the skill directory), so the stored path is whatever the script prints. Override the storage root with the `STENOGRAPHER_ROOT` environment variable only when actually needed.
 
 Details of `--supersedes`/ID semantics for existing records, the exact `--symbol` naming rules and diff format for `code-change`, and fully worked `append` examples live in `~/.local/share/skills/stenographer/reference.md` next to this file. Read it when the matching situation comes up (superseding an older decision, the first `code-change`, unclear example syntax) — not necessarily at the start of every task.
 
@@ -58,7 +58,7 @@ Do this after the mode is chosen, before further research, planning, code change
    b. otherwise, if a transcript whose key equals the current branch name exists → continue it by default;
    c. otherwise, including detached HEAD, don't guess: tell the user that no transcript was found for the current branch, mention that the list can be used to continue an existing one, and ask whether to create a new one and under which name (suggest the branch name, or a short task name when the branch doesn't describe the task). Wait for the answer.
 3. If the chosen transcript exists:
-   a. read the digest `~/.config/ai-rules/stenographer/<repository>/<key>.digest.md` first: a one-line-per-event map of the active events with their IDs. If it is missing, run `python3 ~/.local/share/skills/stenographer/scripts/stenographer.py digest`;
+   a. read the digest `<key>.digest.md` first (it lies next to the transcript, in the directory printed by `list`): a one-line-per-event map of the active events with their IDs. If it is missing, run `python3 ~/.local/share/skills/stenographer/scripts/stenographer.py digest`;
    b. run `python3 ~/.local/share/skills/stenographer/scripts/stenographer.py context` and read the output as your primary context;
    c. use the IDs from the digest and the context to read the underlying source events via `show --event E001`; for a plan with deltas, read the base plan and every delta that applies to it. The digest line and the context output are a pointer and a trimmed excerpt, not a substitute for the full text of requirements;
    d. for older records with no supersede links, don't assume the decision still holds automatically: cross-check the user's latest input and the current code, reading `show --type user-request,user-addition,user-decision,decision,plan` or the whole transcript if needed;
